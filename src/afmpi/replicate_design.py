@@ -14,8 +14,8 @@ _VALID_METHODS = {"JK1", "JKn", "BRR", "Fay_BRR", "bootstrap", "SDR"}
 class ReplicateDesign(Design):
     """Replicate-weight design: the estimand is re-evaluated, never linearized.
 
-    Methods JK1 and JKn are supported in phase 5a. Methods BRR, Fay_BRR (phase 5b)
-    and bootstrap, SDR (phase 5c) raise NotImplementedError.
+    Methods JK1, JKn, BRR, Fay_BRR are supported. Methods bootstrap,
+    SDR (phase 5c) raise NotImplementedError.
     """
 
     variance_path: ClassVar[str] = "replication"
@@ -40,14 +40,9 @@ class ReplicateDesign(Design):
             raise ValueError(
                 f"method must be one of {sorted(_VALID_METHODS)}; got {self.method!r}"
             )
-        if self.method in ("BRR", "Fay_BRR"):
-            raise NotImplementedError(
-                f"method {self.method!r} is not implemented in phase 5a "
-                "(scheduled for phase 5b)"
-            )
         if self.method in ("bootstrap", "SDR"):
             raise NotImplementedError(
-                f"method {self.method!r} is not implemented in phase 5a "
+                f"method {self.method!r} is not implemented in phase 5b "
                 "(scheduled for phase 5c)"
             )
 
@@ -85,6 +80,9 @@ class ReplicateDesign(Design):
                     "replicate_weights cannot overlap with weights/household_size/strata/psu: "
                     f"{sorted(overlap)}"
                 )
+
+        if self.method == "Fay_BRR" and self.fay is None:
+            object.__setattr__(self, "fay", 0.5)
 
         if self.fay is not None:
             if self.method != "Fay_BRR":

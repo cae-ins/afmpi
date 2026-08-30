@@ -6,6 +6,7 @@ Replicate weights are evaluated in batches without linearizing estimands.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from math import isfinite
 
@@ -13,6 +14,7 @@ import polars as pl
 
 from .deprivation import WEIGHT
 from .estimands import RatioEstimand
+from .hadamard import sylvester
 from .linearization import RatioTotals
 from .replicate_design import ReplicateDesign
 
@@ -59,8 +61,123 @@ def generate_replicate_weights(
 ) -> tuple[pl.DataFrame, tuple[str, ...], float, tuple[float, ...]]:
     """Materialise the replicate weight columns, and their scale/rscales."""
 
-    if design.method not in ("JK1", "JKn"):
+    if design.method not in ("JK1", "JKn", "BRR", "Fay_BRR"):
         raise NotImplementedError(f"weight generation for {design.method!r} is not implemented")
+
+    base_w = pl.col(design.weights) if design.weights is not None else pl.lit(1.0)
+
+    if design.method in ("BRR", "Fay_BRR"):
+        if design.psu is None:
+            raise ValueError(
+                f"psu column must be specified for {design.method} replicate weight generation"
+            )
+
+        psu_col = design.psu
+        strata_col = design.strata
+
+        if strata_col is not None:
+            strata_df = (
+                frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
+                .unique()
+                .sort("strata_str")
+            )
+            strata_list = strata_df["strata_str"].to_list()
+        else:
+            strata_list = ["__afmpi_all__"]
+
+        H = len(strata_list)
+
+        psu_map: dict[str, list[str]] = {}
+        for h_key in strata_list:
+            if strata_col is not None:
+                sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
+            else:
+                sub_frame = frame
+            psu_in_h = (
+                sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
+                .unique()
+                .sort("psu_str")["psu_str"]
+                .to_list()
+            )
+            m_h = len(psu_in_h)
+            if m_h != 2:
+                raise ValueError(
+                    f"stratum {h_key!r} contains {m_h} PSU; "
+                    f"{design.method} requires exactly 2 PSUs per stratum"
+                )
+            psu_map[h_key] = psu_in_h
+
+        k = math.ceil(math.log2(H + 1))
+        R = 2**k
+        if R < 4:
+            R = 4
+
+        H_df = sylvester(R)
+        H_mat = H_df.to_numpy()
+
+        rho = (
+            design.fay
+            if (design.method == "Fay_BRR" and design.fay is not None)
+            else 0.0
+        )
+        if design.method == "Fay_BRR" and design.fay is None:
+            rho = 0.5
+
+        sel_factor = 2.0 - rho
+        nonsel_factor = rho
+
+        col_names: list[str] = []
+        exprs_to_add: list[pl.Expr] = []
+
+        for r in range(R):
+            col_name = f"{_REPWGT_PREFIX}{r + 1}"
+            col_names.append(col_name)
+
+            sel_conds: list[pl.Expr] = []
+            for h_idx, h_key in enumerate(strata_list):
+                psus = psu_map[h_key]
+                delta_rh = int(H_mat[r, h_idx + 1])
+                sel_psu = psus[0] if delta_rh == 1 else psus[1]
+
+                if strata_col is not None:
+                    cond = (pl.col(strata_col).cast(pl.String) == h_key) & (
+                        pl.col(psu_col).cast(pl.String) == sel_psu
+                    )
+                else:
+                    cond = pl.col(psu_col).cast(pl.String) == sel_psu
+                sel_conds.append(cond)
+
+            combined_sel = sel_conds[0]
+            for c in sel_conds[1:]:
+                combined_sel = combined_sel | c
+
+            if design.method == "BRR":
+                expr = (
+                    pl.when(combined_sel)
+                    .then(base_w * 2.0)
+                    .otherwise(0.0)
+                    .alias(col_name)
+                )
+            else:
+                expr = (
+                    pl.when(combined_sel)
+                    .then(base_w * sel_factor)
+                    .otherwise(base_w * nonsel_factor)
+                    .alias(col_name)
+                )
+            exprs_to_add.append(expr)
+
+        if design.scale is not None:
+            scale = design.scale
+        else:
+            if design.method == "BRR":
+                scale = 1.0 / R
+            else:
+                scale = 1.0 / (R * ((1.0 - rho) ** 2))
+
+        rscales = (1.0,) * R if design.rscales is None else design.rscales
+        new_frame = frame.with_columns(exprs_to_add)
+        return new_frame, tuple(col_names), scale, rscales
 
     base_w = pl.col(design.weights) if design.weights is not None else pl.lit(1.0)
 

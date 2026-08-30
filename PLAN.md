@@ -957,8 +957,11 @@ lu §14 sous son numéro.
     un seul `frame.select()` par lot de 64 réplicats, incompatible avec un appel séparé de
     `linearization.totals` par réplicat) ; la formule est dupliquée à l'identique plutôt que
     partagée, formule vérifiée manuellement par l'orchestrateur, pas un bug.
-5b. **`ReplicateDesign` — BRR/Fay BRR** : génération de la matrice de Hadamard si les poids ne
-    sont pas fournis, coefficient de Fay.
+5b. ✅ **`ReplicateDesign` — BRR/Fay BRR** (fait, 2026-08-30) : génération de la matrice de
+    Hadamard (Sylvester) si les poids ne sont pas fournis, coefficient de Fay. 167/167 tests ;
+    orthogonalité de Sylvester revérifiée indépendamment par l'orchestrateur (numpy) pour
+    n∈{2,4,8,16,32}. Défaut `fay=0.5` non explicitement mandaté par §14.5b mais cohérent avec
+    l'exemple d'API du §5 (ligne ~430) et la convention des enquêtes fédérales US.
 5c. **`ReplicateDesign` — bootstrap/SDR, et le cahier des charges enrichi** : `scale`, `rscales`,
     `combined_weights`, `mse` vs variance de réplicat centrée (§4, §6) — pour lire correctement
     des fichiers de poids de réplicat déjà produits par une institution. Rigueur de validation à

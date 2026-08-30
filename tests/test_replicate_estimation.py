@@ -452,3 +452,146 @@ def test_undefined_replicate_ratio_gives_nan_variance():
     # Degrees of freedom is still R - 1 = 2 - 1 = 1 (replicate was not dropped)
     degf_df = res.degf()
     assert int(degf_df["psus"].iloc[0]) == 2
+
+
+# -----------------------------------------------------------------------------
+# Phase 5b tests: BRR and Fay BRR (PLAN.md §14.5b)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("num_strata", "expected_replicates"),
+    [(3, 4), (4, 8), (7, 8), (8, 16)],
+)
+def test_hadamard_order_selection_rule(num_strata: int, expected_replicates: int):
+    """Test #3: Ordre choisi H=3 -> R=4 ; H=4 -> R=8 ; H=7 -> R=8 ; H=8 -> R=16."""
+    rows = []
+    for h in range(1, num_strata + 1):
+        for p in (1, 2):
+            rows.append(
+                {
+                    "stratum": f"S{h}",
+                    "psu": f"P{h}_{p}",
+                    "w": 1.0,
+                    "d1": 1,
+                    "d2": 0,
+                }
+            )
+    df = pl.DataFrame(rows)
+    rd = ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR")
+    _, repw_cols, _, _ = generate_replicate_weights(df, rd)
+    assert len(repw_cols) == expected_replicates
+
+
+def test_fay_brr_fay_0_matches_brr_exactly():
+    """Test #4: Fay_BRR(fay=0.0) donne exactement BRR (au bit près)."""
+    data = []
+    for h in range(1, 4):
+        for p in (1, 2):
+            for i in range(5):
+                data.append(
+                    {
+                        "strata": f"S{h}",
+                        "psu": f"P{h}_{p}",
+                        "weight": 2.0,
+                        "d1": i % 2,
+                        "d2": (i + 1) % 2,
+                    }
+                )
+    df = pl.DataFrame(data)
+
+    rd_brr = ReplicateDesign(
+        weights="weight", strata="strata", psu="psu", method="BRR"
+    )
+    rd_fay0 = ReplicateDesign(
+        weights="weight", strata="strata", psu="psu", method="Fay_BRR", fay=0.0
+    )
+
+    frame_brr, cols_brr, scale_brr, rscales_brr = generate_replicate_weights(
+        df, rd_brr
+    )
+    frame_fay, cols_fay, scale_fay, rscales_fay = generate_replicate_weights(
+        df, rd_fay0
+    )
+
+    assert cols_brr == cols_fay
+    assert scale_brr == scale_fay
+    assert rscales_brr == rscales_fay
+    for col in cols_brr:
+        assert (frame_brr[col] == frame_fay[col]).all()
+
+    spec = Specification(
+        dimensions={"d1": ("d1",), "d2": ("d2",)}, weights={"d1": 0.5, "d2": 0.5}
+    )
+    res_brr = estimate(df, spec, rd_brr, k=0.5)
+    res_fay = estimate(df, spec, rd_fay0, k=0.5)
+
+    assert res_brr.H == res_fay.H
+    assert res_brr.M0 == res_fay.M0
+    assert (
+        res_brr.se()["se"].to_list() == res_fay.se()["se"].to_list()
+    )
+
+
+def test_brr_variance_matches_taylor_variance_for_2psu_strata():
+    """Test #5: Sur un plan à H strates x 2 PSU, BRR et la linéarisation donnent la même variance pour M0 à 1e-10."""
+    data = []
+    for h in range(1, 4):
+        for p in (1, 2):
+            for i in range(10):
+                data.append(
+                    {
+                        "stratum": f"S{h}",
+                        "psu": f"P{h}_{p}",
+                        "weight": 1.0,
+                        "d1": 1 if (p == 1 and i < 8) else (1 if i < 2 else 0),
+                        "d2": 1 if (p == 1 and i < 6) else (1 if i < 4 else 0),
+                    }
+                )
+    df = pl.DataFrame(data)
+
+    spec = Specification(
+        dimensions={"d1": ("d1",), "d2": ("d2",)}, weights={"d1": 0.5, "d2": 0.5}
+    )
+
+    taylor_design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
+    brr_design = ReplicateDesign(
+        method="BRR", strata="stratum", psu="psu", weights="weight"
+    )
+
+    res_taylor = estimate(df, spec, taylor_design, k=0.3)
+    res_brr = estimate(df, spec, brr_design, k=0.3)
+
+    se_taylor_M0 = res_taylor.se().filter(pl.col("measure") == "M0")["se"].item()
+    se_brr_M0 = res_brr.se().filter(pl.col("measure") == "M0")["se"].item()
+
+    var_taylor = se_taylor_M0**2
+    var_brr = se_brr_M0**2
+    diff = abs(var_brr - var_taylor)
+
+    assert diff < 1e-10
+
+
+@pytest.mark.parametrize("num_psu", [1, 3])
+def test_brr_invalid_psu_count_raises_value_error(num_psu: int):
+    """Test #6: Une strate à 1 ou 3 PSU -> ValueError nommant la strate."""
+    rows = []
+    # Stratum S1 has 2 PSUs
+    for p in (1, 2):
+        rows.append(
+            {"stratum": "S1", "psu": f"P1_{p}", "w": 1.0, "d1": 1, "d2": 0}
+        )
+    # Stratum S2 has num_psu PSUs (1 or 3)
+    for p in range(1, num_psu + 1):
+        rows.append(
+            {"stratum": "S2", "psu": f"P2_{p}", "w": 1.0, "d1": 0, "d2": 1}
+        )
+    df = pl.DataFrame(rows)
+
+    rd = ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR")
+
+    with pytest.raises(ValueError) as exc_info:
+        generate_replicate_weights(df, rd)
+
+    assert "S2" in str(exc_info.value)
+

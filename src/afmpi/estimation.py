@@ -209,14 +209,9 @@ def _estimate_from_matrix(
                     )
     elif design.variance_path == "replication":
         rep_design: ReplicateDesign = design  # type: ignore[assignment]
-        if rep_design.method in ("BRR", "Fay_BRR"):
-            raise NotImplementedError(
-                f"method {rep_design.method!r} is not implemented in phase 5a "
-                "(scheduled for phase 5b)"
-            )
         if rep_design.method in ("bootstrap", "SDR"):
             raise NotImplementedError(
-                f"method {rep_design.method!r} is not implemented in phase 5a "
+                f"method {rep_design.method!r} is not implemented in phase 5b "
                 "(scheduled for phase 5c)"
             )
 
@@ -237,6 +232,7 @@ def _estimate_from_matrix(
                 method=rep_design.method,
                 strata=rep_design.strata,
                 psu=rep_design.psu,
+                fay=rep_design.fay,
                 scale=scale,
                 rscales=rscales,
                 combined_weights=rep_design.combined_weights,
@@ -247,11 +243,22 @@ def _estimate_from_matrix(
             frame_work = frame
             repw_cols = rep_design.replicate_weights
             R = len(repw_cols)
-            scale = (
-                rep_design.scale
-                if rep_design.scale is not None
-                else ((R - 1) / R if rep_design.method == "JK1" else 1.0)
-            )
+            if rep_design.scale is not None:
+                scale = rep_design.scale
+            elif rep_design.method == "JK1":
+                scale = (R - 1) / R
+            elif rep_design.method == "BRR":
+                scale = 1.0 / R
+            elif rep_design.method == "Fay_BRR":
+                rho = rep_design.fay if rep_design.fay is not None else 0.5
+                scale = 1.0 / (R * ((1.0 - rho) ** 2))
+            elif rep_design.method == "SDR":
+                scale = 4.0 / R
+            elif rep_design.method == "bootstrap":
+                scale = 1.0 / R
+            else:  # JKn
+                scale = 1.0
+
             rscales = (
                 rep_design.rscales
                 if rep_design.rscales is not None
@@ -270,6 +277,7 @@ def _estimate_from_matrix(
                 method=rep_design.method,
                 strata=rep_design.strata,
                 psu=rep_design.psu,
+                fay=rep_design.fay,
                 scale=scale,
                 rscales=rscales,
                 combined_weights=rep_design.combined_weights,

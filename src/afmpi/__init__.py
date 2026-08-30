@@ -2,6 +2,7 @@
 
 from .design_base import Design
 from .estimation import estimate
+from .hadamard import sylvester
 from .pps import PPSDesign
 from .replicate_design import ReplicateDesign
 from .results import EstimationResult
@@ -20,5 +21,6 @@ __all__ = [
     "Stage",
     "SurveyDesign",
     "estimate",
+    "sylvester",
 ]
 __version__ = "0.3.0"
