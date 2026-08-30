@@ -2712,6 +2712,41 @@ attraper une régression de complexité sans coûter deux minutes de CI.
 plus rapide », « M fois moins de mémoire ») va dans le `README.md` **avec la date, la machine et
 les versions** — un chiffre sans son contexte n'est pas une mesure.
 
+#### `EstimationResult` ne doit pas retenir la base préparée (relecture de code, utilisateur,
+2026-08-30 — voir §15, point non couvert par une passe antérieure de cette section)
+
+Le noyau v1 (phases 0-3) fait retenir à `EstimationResult` sa `_matrix: DeprivationMatrix`
+complète, pour que `result.domain(...)` et `result.scores()` restent utilisables après coup. À
+l'échelle enquête, sans conséquence. À l'échelle recensement, un objet résultat de quelques
+kilooctets garderait vivant un `DataFrame` de plusieurs dizaines de Go — **inacceptable, pas
+juste sous-optimal**.
+
+Règle normative pour cette phase : le résultat produit par le chemin paresseux/`CensusDesign`
+(`LazyEstimation.collect()` ou `estimate(design=CensusDesign(), ...)`) **ne retient PAS** la
+matrice de privation ligne à ligne — seulement les tables agrégées déjà petites (sommes par
+grappe/strate/groupe, au plus quelques dizaines de milliers de lignes) nécessaires à `coef()`,
+`confint()`, `vcov()`, `contributions()`. `result.domain(...)`/`result.scores()` appelés après
+coup sur un tel résultat lèvent une erreur explicite (`"scores() requires an in-memory result;
+re-run estimate() without lazy=True/CensusDesign streaming"`) plutôt qu'un `AttributeError` ou,
+pire, un rechargement silencieux et coûteux de la base. Le chemin en mémoire (phases 0-3, petites
+données) garde le comportement actuel sans changement — cette règle ne s'applique qu'aux
+résultats produits par les chemins ajoutés dans cette phase.
+
+#### Compiler le multi-`k` et les désagrégations en un seul plan (relecture de code, utilisateur,
+2026-08-30 — voir §15)
+
+`_estimate_from_matrix()` (phases 0-3) boucle sur les seuils `k`, et pour chaque `k` refait un
+`cluster_sums()` par variable de désagrégation — correct et lisible à l'échelle EHCVM, mais avec
+8 seuils × 3 niveaux de désagrégation, ça fait potentiellement des dizaines d'agrégations
+intégrales de la base. Règle normative pour cette phase : le chemin paresseux/streaming doit
+construire **un seul plan Polars** (une seule expression `group_by`/`agg` par clé de
+regroupement, portant toutes les colonnes numérateur/dénominateur de tous les `k` et de toutes
+les variables `over` à la fois, matérialisé une seule fois), pas une boucle de scans indépendants
+— le nombre de scans du fichier source doit être **indépendant du nombre de `k`** et du nombre de
+variables de désagrégation. Le chemin en mémoire des phases 0-3 (petites données) n'est pas tenu
+à cette contrainte et peut garder sa boucle actuelle si la réécrire n'apporte rien à cette
+échelle — la contrainte porte sur le chemin *streaming/lazy*, pas sur tout `afmpi`.
+
 #### Tests obligatoires
 
 1. `CensusDesign` : `se == 0.0` partout, `lci == uci == est`, `df == 0`, `test()` lève.
@@ -2722,6 +2757,14 @@ les versions** — un chiffre sans son contexte n'est pas une mesure.
 5. Un parquet à 100 000 lignes et 200 colonnes donne le même résultat que la même table chargée
    en mémoire.
 6. Benchmark réduit en CI ; benchmark complet marqué `slow`.
+7. Un résultat produit par le chemin streaming ne retient aucune colonne au niveau ligne — un
+   test introspecte l'objet résultat (taille mémoire, ou absence d'attribut `_matrix`/attribut
+   explicitement vide) plutôt que de se fier à la seule absence d'erreur.
+8. `result.domain(...)` sur un résultat streaming lève l'erreur explicite documentée ci-dessus,
+   pas un `AttributeError` générique.
+9. Pour un jeu de test à plusieurs `k` et plusieurs variables `over`, le nombre d'appels de
+   lecture/scan du fichier source (instrumenté ou compté via le plan d'exécution Polars) ne
+   croît pas avec le nombre de `k` ni le nombre de variables `over`.
 
 ---
 
