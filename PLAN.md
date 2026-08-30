@@ -894,9 +894,13 @@ ajoute autant de surface que le cahier des charges du §4 le permettrait.
    par sous-population sans casser le design — §6), `over=[...]`, décomposabilité vérifiée par
    assertion (`Σφˡ·M0ˡ = M0`, `DECOMPOSITION_TOLERANCE = 1e-9`), `klist` (robustesse à k).
    Tests : domaines qui traversent les strates, très petits domaines.
-3.5. **Jalon de conformité du noyau — gel méthodologique avant le v2** (ajouté sur relecture de
+3.5. 🟡 **Jalon de conformité du noyau — gel méthodologique avant le v2** (ajouté sur relecture de
    code par l'utilisateur, 2026-08-30, voir §15). Pas une nouvelle fonctionnalité : une preuve
-   que les phases 0-3 sont correctes avant de construire dessus. Portée (sous-ensemble du tableau
+   que les phases 0-3 sont correctes avant de construire dessus. **Statut** : CI GitHub et rejet
+   PSU/strates manquants faits (via le stamp 4.5, §16) ; les trois subtilités (`degf()` sous
+   domaine, bornes `logit`, politique `missing`) déjà testées depuis `v0.2.0`. **Reste** : l'oracle
+   `survey` (R) sur le noyau de base lui-même (SRS, stratifié simple, un degré, domaines) — jamais
+   fait, voir le stamp dédié §17. Portée (sous-ensemble du tableau
    de designs du §8.A qui s'applique à ce que le noyau couvre déjà — pas la matrice complète,
    qui a besoin des phases 4a+) :
    - `survey` (R) comme oracle sur SRS, stratifié simple, un degré de grappes, et domaines —
@@ -3092,3 +3096,34 @@ pas des faits. Deux écarts trouvés au premier passage :
 127/127 tests après correction. Leçon pour les stamps suivants : un rapport « aucun écart » d'un
 agent délégué n'est une preuve que si l'orchestrateur a réellement rejoué au moins les affirmations
 numériques centrales, pas seulement relu le code produit.
+
+## 17. Stamp 3.5-bis — oracle `survey` (R) sur le noyau de base (2026-08-30)
+
+Le stamp 4.5 (§16) a créé des oracles R pour le multi-degrés+FPC et le PPS (4a/4b/4c), mais **pas**
+pour le périmètre originel de la phase 3.5 (§15) : SRS, stratifié simple, un degré de grappes, et
+domaines — le noyau des phases 0-3 (`v0.2.0`) sur lequel tout le reste (4a-4c, et bientôt 5a-7)
+s'appuie. Ce noyau n'a donc, à ce jour, **jamais** été comparé à un oracle externe. Les trois
+subtilités listées par 3.5 (`degf()` sous domaine, bornes de l'IC `logit`, politique `missing` par
+défaut) sont en fait déjà testées depuis `v0.2.0` (`ec0c75c`, avant même que 3.5 soit proposée) —
+seul l'oracle R manque réellement.
+
+**Portée de ce stamp** : un script `tests/oracle/core_oracle.R` (même convention que
+`multistage_oracle.R`/`pps_oracle.R`, `tests/oracle/README.md` mis à jour) qui compare `afmpi` à
+`survey` (R) sur, au minimum :
+
+1. Un design SRS simple (pas de strate, pas de grappe déclarée — chaque ligne sa propre grappe) :
+   `H`, `A`, `M0`, SE, IC (`logit` et `normal`/`t`), `degf()`.
+2. Un design stratifié simple à un degré (strates + PSU, plusieurs strates, tailles inégales) :
+   mêmes quantités.
+3. Un domaine (`subset()` en R) sur le design stratifié ci-dessus : mêmes quantités, en vérifiant
+   spécifiquement que `degf()` compte les grappes/strates que le domaine atteint réellement (pas
+   celles du design complet) — c'est le point que `test_domain.py:113/117` teste déjà en interne,
+   mais sans comparaison à R.
+4. Un cas aux bornes pour l'IC `logit` (`H` proche de 0 ou de 1) pour confirmer que R et `afmpi`
+   s'accordent sur le comportement (`normal`/`t` peuvent sortir de `[0,1]`, `logit` non).
+
+Remplacer les assertions non discriminantes restantes (s'il y en a, sur ce périmètre précis) par
+des égalités numériques à 10⁻¹⁰ près contre les valeurs R, dans le même style que le stamp 4.5.
+
+**Une fois ce stamp passé** : le noyau 0-3 est enfin gelé méthodologiquement contre un oracle
+externe — la phase 3.5 (§9, §15) est alors réellement close, pas seulement par ricochet via 4.5.
