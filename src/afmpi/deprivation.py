@@ -14,8 +14,8 @@ from math import isfinite
 import pandas as pd
 import polars as pl
 
+from .design_base import Design
 from .specification import Specification
-from .survey_design import SurveyDesign
 
 InputKind = str
 
@@ -68,7 +68,7 @@ class DeprivationMatrix:
 
     frame: pl.DataFrame
     spec: Specification
-    design: SurveyDesign
+    design: Design
     observations: int
     excluded_observations: int
     population: float
@@ -82,7 +82,7 @@ class DeprivationMatrix:
 def build(
     df: pd.DataFrame | pl.DataFrame,
     spec: Specification,
-    design: SurveyDesign,
+    design: Design,
     *,
     required_columns: tuple[str, ...] = (),
 ) -> DeprivationMatrix:
@@ -90,8 +90,10 @@ def build(
 
     if not isinstance(spec, Specification):
         raise TypeError("spec must be a Specification")
-    if not isinstance(design, SurveyDesign):
-        raise TypeError("design must be a SurveyDesign or None")
+    if not isinstance(design, Design):
+        raise TypeError(
+            "design must be a SurveyDesign, ReplicateDesign, CensusDesign or None"
+        )
 
     indicators = spec.indicators  # also verifies that the specification is configured
     frame, input_kind = _to_polars(df)
@@ -132,12 +134,13 @@ def _to_polars(df: pd.DataFrame | pl.DataFrame) -> tuple[pl.DataFrame, InputKind
 def _validate_required_columns(
     frame: pl.DataFrame,
     indicators: tuple[str, ...],
-    design: SurveyDesign,
+    design: Design,
     extra: tuple[str, ...],
 ) -> None:
     pps_needed = ()
-    if design.pps is not None and design.pps.inclusion_probability is not None:
-        pps_needed = (design.pps.inclusion_probability,)
+    pps = getattr(design, "pps", None)
+    if pps is not None and pps.inclusion_probability is not None:
+        pps_needed = (pps.inclusion_probability,)
     needed = set(indicators) | set(design.required_columns) | set(extra) | set(pps_needed)
     missing = sorted(needed - set(frame.columns))
     if missing:
@@ -177,7 +180,7 @@ def _validate_and_normalize_indicators(
     return frame.with_columns(normalized)
 
 
-def _add_population_weight(frame: pl.DataFrame, design: SurveyDesign) -> pl.DataFrame:
+def _add_population_weight(frame: pl.DataFrame, design: Design) -> pl.DataFrame:
     expressions: list[pl.Expr] = []
     for column in design.required_columns:
         dtype = frame.schema[column]
@@ -189,7 +192,7 @@ def _add_population_weight(frame: pl.DataFrame, design: SurveyDesign) -> pl.Data
         ).item()
         if invalid:
             raise ValueError(f"survey column {column!r} contains missing or non-finite values")
-        if column == design.household_size:
+        if column == getattr(design, "household_size", None):
             bad_sign = frame.select((value <= 0).any()).item()
             message = "strictly positive"
         else:
@@ -264,18 +267,23 @@ def _apply_missing_policy(frame: pl.DataFrame, spec: Specification) -> pl.DataFr
     )
 
 
-def _validate_no_missing_design_columns(frame: pl.DataFrame, design: SurveyDesign) -> None:
-    if design.missing_design != "error":
+def _validate_no_missing_design_columns(frame: pl.DataFrame, design: Design) -> None:
+    missing_design = getattr(design, "missing_design", "error")
+    if missing_design != "error":
         return
 
     cols_to_check: list[str] = []
-    if design.stages is None:
-        if design.strata is not None:
+    stages = getattr(design, "stages", None)
+    if stages is None:
+        if getattr(design, "strata", None) is not None:
             cols_to_check.append(design.strata)
-        if design.psu is not None:
+        if getattr(design, "psu", None) is not None:
             cols_to_check.append(design.psu)
+        rep_weights = getattr(design, "replicate_weights", None)
+        if rep_weights is not None:
+            cols_to_check.extend(rep_weights)
     else:
-        for stage in design.stages:
+        for stage in stages:
             if stage.strata is not None:
                 cols_to_check.append(stage.strata)
             if stage.id is not None:
@@ -287,14 +295,18 @@ def _validate_no_missing_design_columns(frame: pl.DataFrame, design: SurveyDesig
         null_count = frame.select(pl.col(col).is_null().sum()).item()
         if null_count > 0:
             raise ValueError(
-                f"design column {col!r} contains {null_count} missing value(s); missing_design='error' (the default) rejects missing design identifiers"
+                f"design column {col!r} contains {null_count} missing value(s); "
+                "missing_design='error' (the default) rejects missing design identifiers"
             )
 
 
-def _add_design_identifiers(frame: pl.DataFrame, design: SurveyDesign) -> pl.DataFrame:
+def _add_design_identifiers(frame: pl.DataFrame, design: Design) -> pl.DataFrame:
     """Materialise stratum, PSU and FPC keys across sampling stages."""
 
     _validate_no_missing_design_columns(frame, design)
+
+    if not hasattr(design, "resolved_stages"):
+        return frame
 
     stages = design.resolved_stages
     if len(stages) == 0:

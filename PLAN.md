@@ -949,9 +949,14 @@ lu §14 sous son numéro.
     vraies égalités numériques ; resynchronisation README/PLAN sur `v0.3.0`. **Bloque 5a** tant
     que non fait — les deux branches d'inférence (Taylor, réplication) doivent s'adosser à un
     socle audité, pas seulement testé en interne.
-5a. **`ReplicateDesign` — JK1/JKn** (§5, réévaluation par réplicat, PAS de linéarisation) : les
-    méthodes de jackknife, les plus simples à valider, avant BRR (qui a besoin d'une matrice de
-    Hadamard, `Fable` 2026-08-30).
+5a. ✅ **`ReplicateDesign` — JK1/JKn** (fait, 2026-08-30, §5, réévaluation par réplicat, PAS de
+    linéarisation) : les méthodes de jackknife, les plus simples à valider, avant BRR (qui a
+    besoin d'une matrice de Hadamard, `Fable` 2026-08-30). 139/139 tests ; une déviation
+    documentée au §14.5a-note : `replicate_totals` n'appelle pas littéralement
+    `linearization.totals` (tension réelle entre cette consigne et l'exigence de lotissement —
+    un seul `frame.select()` par lot de 64 réplicats, incompatible avec un appel séparé de
+    `linearization.totals` par réplicat) ; la formule est dupliquée à l'identique plutôt que
+    partagée, formule vérifiée manuellement par l'orchestrateur, pas un bug.
 5b. **`ReplicateDesign` — BRR/Fay BRR** : génération de la matrice de Hadamard si les poids ne
     sont pas fournis, coefficient de Fay.
 5c. **`ReplicateDesign` — bootstrap/SDR, et le cahier des charges enrichi** : `scale`, `rscales`,

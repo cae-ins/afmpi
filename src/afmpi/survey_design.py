@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
+
+from .design_base import Design
 
 if TYPE_CHECKING:
     from .pps import PPSDesign
@@ -32,7 +34,7 @@ class Stage:
 
 
 @dataclass(frozen=True, slots=True)
-class SurveyDesign:
+class SurveyDesign(Design):
     """Weights, strata and sampling units of a single or multi-stage design.
 
     For individual-level data, set ``weights`` only. For one row per household,
@@ -43,6 +45,8 @@ class SurveyDesign:
     Single-stage designs can be declared using ``strata`` and ``psu``, or
     multi-stage designs using ``stages=[Stage(...)]``.
     """
+
+    variance_path: ClassVar[str] = "taylor"
 
     weights: str | None = None
     household_size: str | None = None

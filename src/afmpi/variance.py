@@ -35,14 +35,22 @@ class LonelyPSUWarning(UserWarning):
 
 @dataclass(frozen=True, slots=True)
 class DesignDegrees:
-    """Degrees of freedom of one design context, kept explicit (PLAN.md §6)."""
+    """Degrees of freedom of one design context, kept explicit (PLAN.md §6).
+
+    For Taylor designs: ``psus`` is total sampled clusters, ``strata`` is number
+    of strata. For replication designs: ``psus`` holds ``R`` (number of replicates),
+    ``strata`` holds number of variance strata ``H``, and ``lonely_strata`` is ``0``.
+    """
 
     psus: int
     strata: int
-    lonely_strata: int
+    lonely_strata: int = 0
+    override_df: int | None = None
 
     @property
     def df(self) -> int:
+        if self.override_df is not None:
+            return self.override_df
         return self.psus - self.strata
 
     @property
