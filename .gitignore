@@ -1,0 +1,26 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging and coverage outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local credentials and agent artifacts
+.pypirc
+_codex_*
+agy-review.err

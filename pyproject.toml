@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "afmpi"
+version = "0.1.0"
+description = "Alkire-Foster multidimensional poverty measurement with a Polars-native engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "CAE - ANStat CI" },
+]
+keywords = ["poverty", "multidimensional-poverty", "alkire-foster", "mpi", "polars"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "pandas>=2.0",
+  "polars>=1.0",
+  "pyarrow>=14",
+]
+
+[project.urls]
+Homepage = "https://github.com/cae-ins/afmpi"
+Repository = "https://github.com/cae-ins/afmpi"
+Issues = "https://github.com/cae-ins/afmpi/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/afmpi"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
