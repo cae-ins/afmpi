@@ -170,8 +170,12 @@ afmpi/
 │   ├── contributions.py        actb, pctb, décomposition par dimension
 │   ├── decomposition.py        désagrégation par sous-groupe (`over`), vérif décomposabilité
 │   ├── robustness.py           robustesse à k (klist), éventuellement à d'autres choix
-│   ├── variance.py             les DEUX méthodes d'IC (ultimate cluster tronqué, logit svyciprop)
-│   ├── change_over_time.py     comparaison inter-vagues (absolu, relatif, annualisé)
+│   ├── variance.py             méthodes d'IC : ultimate cluster tronqué, logit svyciprop en
+│   │                            phase 1-3 ; réplication (bootstrap/BRR/jackknife façon `svy`,
+│   │                            §12) envisagée plus tard, pas un jalon actuel
+│   ├── change_over_time.py     paramètres tvar/cot_year de estimate() (§6, §12) : deltas
+│   │                            absolus/relatifs/annualisés — fonctions internes, pas une API
+│   │                            séparée pour l'utilisateur
 │   └── results.py              EstimationResult : coef(), confint(), summary(), to_frame()
 ├── tests/
 │   ├── test_estimation.py      cas construits à la main (répliquer les auto-contrôles de
@@ -210,9 +214,15 @@ resultat = afmpi.estimate(
                                 # 0/1 (g0) + colonnes techniques (voir §7, compatibilité d'entrée)
     spec=spec,
     design=design,
-    k=[0.20, 1/3, 0.50],       # plusieurs seuils -> tableau de robustesse automatique
-    over=["region", "milieu"], # désagrégations, autant que voulu
-    ci_method="logit",         # ou "ultimate_cluster"
+    k=[0.20, 1/3, 0.50],       # plusieurs seuils -> tableau de robustesse automatique (fractions
+                                # 0-1, pas des pourcentages — voir §12, écart assumé vs mpitb/mpitbR)
+    over=["region", "milieu"], # désagrégations, autant que voulu — un seul appel, comme
+                                # mpitb.est(..., over=c("area","region")) (§12)
+    ci_method="logit",         # "logit" (défaut) ou "ultimate_cluster" ; voir §12 pour un futur
+                                # "replicate" (bootstrap/BRR/jackknife), pas en phase 1-3
+    tvar=None, cot_year=None,  # comparaison dans le temps intégrée à estimate() plutôt qu'une
+                                # fonction séparée — reprend le patron mpitb.est(tvar=, cotyear=)
+                                # (§12), simplifie l'API par rapport à un compare_over_time() à part
     backend="polars",          # défaut ; "pandas" en repli (plus lent, documenté comme tel)
     lazy=False,                # True -> renvoie un plan de calcul non exécuté, .collect() pour lancer
 )
@@ -221,7 +231,9 @@ resultat.coef()                # H, A, M0 ponctuels, par k et par sous-groupe
 resultat.confint()             # IC
 resultat.contributions()       # hd, hdk, actb, pctb par indicateur
 resultat.summary()             # tableau formaté, façon mpitb
-resultat.to_frame()            # DataFrame plat, pour export Excel/CSV (même type que l'entrée)
+resultat.to_frame()            # DataFrame plat, colonnes minimales et nommées sobrement
+                                # (est, se, lci, uci, cv, ... — benchmark : svy.to_polars(), §12),
+                                # même type que l'entrée pour l'export Excel/CSV
 
 # lecture directe depuis un fichier recensement en parquet, en streaming — §7
 lazy_result = afmpi.from_parquet("recensement_2026.parquet", streaming=True) \
@@ -232,6 +244,11 @@ resultat = lazy_result.collect()
 Point de design encore ouvert :
 - API orientée objets (`Specification`, `SurveyDesign`, `EstimationResult`) vs fonctionnelle pure
   (fonctions + dataclasses immuables) — privilégier ce qui teste le plus facilement.
+
+**Revu et affiné en profondeur (Claude, 2026-08-30, voir §12)** : `estimate()` fusionne
+désormais ce qui aurait été un `compare_over_time()` séparé (paramètres `tvar`/`cot_year`,
+absents si non utilisés) — patron repris de `mpitb.est()` en R, qui fait la même chose en un
+seul appel plutôt que deux résultats à comparer après coup.
 
 **Tranché en revue (`agy`, 2026-08-30) : pas de dépendance à `samplics`.** Réimplémentation
 native en Polars de la variance de plan de sondage (linéarisation par grappe, méthode *ultimate
@@ -371,13 +388,22 @@ seulement testé unitairement :
 4. **Performance et passage à l'échelle** (§7) : E/S parquet, mode streaming/lazy, jeu de données
    synthétique à l'échelle recensement, suite de benchmarks avec cibles chiffrées, comparaison
    mesurée à un équivalent pandas naïf.
-5. **Évolution dans le temps** : `compare_over_time`, deltas absolus/relatifs/annualisés.
-6. **Validation croisée finale** : comparaison chiffrée à `PythonIPM` sur l'EHCVM 2021 complet,
+5. **Évolution dans le temps** : paramètres `tvar=`/`cot_year=` de `estimate()` (§6, §12 —
+   plus de fonction `compare_over_time()` séparée), deltas absolus/relatifs/annualisés.
+6. **Rigueur de variance à égaler avec les meilleurs outils du domaine** (§12) : méthodes de variance par
+   réplication (bootstrap, jackknife au minimum), en citant `svy` comme référence de correction
+   des erreurs-types. Phase ajoutée suite à l'analyse comparative du §12 — ordre exact (avant ou
+   après la phase 4 performance) à trancher par `agy`.
+7. **Validation croisée finale** : comparaison chiffrée à `PythonIPM` sur l'EHCVM 2021 complet,
    rapport de conformité.
-7. **Packaging** : `pyproject.toml`, README, docs, CI (tests + lint).
-8. **Publication GitHub** : `git init`, commit initial, `gh repo create cae-ins/afmpi --public
+8. **Packaging** : `pyproject.toml`, README (avec la note sur les seuils k en fractions vs
+   pourcentages, §12.B.4), docs, CI (tests + lint).
+9. **Publication GitHub** : `git init`, commit initial, `gh repo create cae-ins/afmpi --public
    --source=. --push` (ou équivalent) — voir la contrainte de compte actif au §3. Pas de
    publication PyPI à ce stade : jalon distinct, sur nouvelle confirmation de l'utilisateur.
+
+*(Note : les phases 1, 8 et 9 sont déjà faites au 2026-08-30 — package de base publié sur
+`github.com/cae-ins/afmpi`, tag `v0.1.0`. Les phases 2 à 7 restent à faire.)*
 
 ## 10. Décisions issues de la revue `agy` (2026-08-30, modèle `gemini-3.6-flash-high`)
 
@@ -415,3 +441,131 @@ correspondantes (§4, §6, §7, §9). Rapport complet dans
 - Où trouver des jeux de données `mpitb` de référence publiquement rejouables sans dépendre d'un
   accès Stata (licence) ? À vérifier — CRAN `mpitbR`/`mpindex` embarquent parfois des exemples en
   `.rda`, plus faciles à récupérer qu'un `.dta` Stata protégé.
+
+## 12. Analyse comparative approfondie des meilleurs packages (Claude, 2026-08-30)
+
+Suite à la demande explicite de l'utilisateur (« il faut vraiment que notre package soit meilleur
+que ceux existant déjà ») d'aller plus loin que la revue initiale d'`agy` (§10), analyse directe
+des meilleurs packages du domaine adjacent — pas seulement `mpitb`/`mpitbR` (Alkire-Foster), mais
+aussi les meilleurs outils Python et R pour le plan de sondage complexe en général, puisque
+c'est la moitié du problème qu'`afmpi` doit résoudre.
+
+### A. `svy` remplace `samplics` — pas juste « abandonné », un successeur réel existe
+
+`samplics` (évalué en §6-§7 comme dépendance candidate, écartée par `agy`) est en réalité
+**déprécié** : son propre site l'annonce, remplacé par **[`svy`](https://svylab.com/docs/svy)**
+(même équipe, `samplics-org/svy` sur GitHub, PyPI `svy` version 0.26.0 au 2026-08-30, ~45
+releases, changelog réel, docs versionnées). Constat important, à ne pas confondre avec la
+décision déjà prise sur `samplics` :
+
+- **`svy` est Polars-natif** (`polars[pyarrow]>=1.33.1` dans ses dépendances), avec un cœur
+  **accéléré en Rust** (`svy-rs`) — exactement la direction technique qu'`afmpi` a choisie pour
+  lui-même en §7, en plus mature et déjà en production.
+- **Validé contre le `survey` package de R** (Thomas Lumley — la référence académique du domaine
+  depuis plus de 20 ans) — un standard de rigueur qu'`afmpi` doit égaler, pas seulement viser.
+- **Variance : Taylor (linéarisation, comme `PythonIPM`/`afmpi` prévu) ET réplication**
+  (Bootstrap, BRR — Balanced Repeated Replication —, Jackknife, SDR — Successive Difference
+  Replication). `afmpi` (§4, §7) ne prévoit pour l'instant QUE deux variantes de linéarisation
+  (ultimate cluster tronqué, logit `svyciprop`) — aucune méthode de réplication. C'est un vrai
+  écart de rigueur face au meilleur outil du domaine, pas un détail.
+- **Ne fait PAS de pauvreté multidimensionnelle / Alkire-Foster** — confirmé absent de sa
+  documentation. Aucun chevauchement sur le cœur de valeur d'`afmpi`, seulement sur la brique
+  « plan de sondage + variance » qui le sous-tend.
+
+**Décision recommandée** (à confirmer par `agy`/l'utilisateur, pas figée) : **ne pas dépendre de
+`svy` en dur** dans `afmpi` — c'est un package encore pré-1.0 (0.26.0), à la vitesse de
+publication élevée (donc surface d'API pas stabilisée), avec une dépendance Rust compilée
+(`svy-rs`, roues binaires par plateforme) qui alourdit l'installation d'un package qui vise la
+simplicité (`pip install afmpi`). En revanche, **`afmpi` doit égaler sa rigueur sur la variance**
+dans un jalon dédié (au-delà de la phase 2 déjà prévue) : ajouter les méthodes de réplication
+(bootstrap et jackknife au minimum ; BRR et SDR si le temps le permet), implémentées nativement
+en Polars, en citant `svy` comme référence de correction (comparer les erreurs-types obtenues sur
+un même jeu de test). Interopérabilité à bas coût à envisager plus tard : accepter en entrée un
+objet `svy.Sample`/`svy.Design` déjà construit, pour les utilisateurs déjà dans cet écosystème,
+sans que `afmpi` en dépende pour fonctionner seul.
+
+### B. Ce que l'API réelle de `mpitbR` précise, au-delà du résumé d'`agy`
+
+Signatures exactes trouvées dans la documentation et le README du package
+([girelaignacio/mpitbR](https://github.com/girelaignacio/mpitbR), CRAN) :
+
+```r
+indicators <- list(d1 = c("d_nutr", "d_cm"),
+                   d2 = c("d_satt", "d_educ"),
+                   d3 = c("d_elct", "d_sani", "d_wtr", "d_hsg", "d_ckfl", "d_asst"))
+set <- mpitb.set(svydata, indicators = indicators, name = "myname", desc = "pref. desc")
+est <- mpitb.est(set, c(20, 33), over = c("area", "region"), tvar = "t", cotyear = "year")
+```
+
+Trois précisions qui affinent le design d'`afmpi` (déjà répercutées en §5-§6) :
+
+1. **`mpitb.set()` prend directement l'objet de plan de sondage** (`svydata`, construit par
+   `survey::svydesign()` en amont) — confirme que le design en objet séparé (`SurveyDesign`
+   d'`afmpi`) est la bonne approche, pas une option parmi d'autres.
+2. **`over=` prend plusieurs variables de regroupement en un seul appel** (`c("area", "region")`)
+   — déjà ce que fait le sketch d'API d'`afmpi` (`over=["region", "milieu"]`), confirmé bon.
+3. **La comparaison dans le temps est un paramètre de `mpitb.est()`** (`tvar=`, `cotyear=`), pas
+   une fonction séparée qui prendrait deux résultats déjà calculés — `afmpi` adoptait
+   `compare_over_time(result_t1, result_t2)` (ancien §6) : **corrigé** pour suivre le même
+   patron que `mpitb`/`mpitbR` (un seul appel à `estimate()`, `tvar`/`cot_year` optionnels).
+4. **Convention des seuils k en pourcentages entiers** (`c(20, 33)`, pas `c(0.20, 0.33)`) —
+   `afmpi` garde des fractions (`k=[0.20, 1/3, 0.50]`, convention Python plus idiomatique pour une
+   valeur de probabilité) mais **doit documenter explicitement cet écart** dans le README, pour
+   les utilisateurs habitués à `mpitb`/`mpitbR` qui s'attendraient à des pourcentages.
+5. **Résultats en objets S3 typés** (`lframe`, `cotframe`) avec des méthodes génériques
+   (`summary.lframe`, `coef.lframe`, `confint.lframe`) — équivalent Python déjà prévu :
+   `EstimationResult` avec `coef()`/`confint()`/`summary()`. Confirmé bon, rien à changer.
+
+### C. Ce que l'API de `svy` inspire pour la forme des résultats
+
+```python
+sample = svy.Sample(data=sample_df, design=design)
+estimate = sample.estimation.mean(...)
+estimate.to_polars()
+# shape: (1, 6) — colonnes : est, se, lci, uci, cv, df
+```
+
+- **Méthodes namespacées par capacité** (`sample.estimation.mean()`, `sample.glm.fit()`) plutôt
+  que des dizaines de méthodes à plat sur un seul objet — à évaluer pour `EstimationResult` si sa
+  surface grandit (ex. `resultat.contributions.censored` / `.uncensored` plutôt que deux méthodes
+  distinctes) ; pas urgent en phase 1-3, à trancher quand la phase 4+ ajoute de la matière.
+- **Colonnes de résultat minimales et sobrement nommées** (`est, se, lci, uci, cv, df`) — bon
+  benchmark pour `to_frame()` : `afmpi` a tendance (héritage direct de `PythonIPM`) à des noms
+  français longs (`taux_privation_non_censure`) ; garder les noms français dans les sorties
+  destinées à un public francophone (cohérent avec `PythonIPM`) mais envisager des alias courts
+  en anglais dans l'API interne/programmatique, pour rester ergonomique en usage `pandas`/`polars`
+  courant. Point à trancher par `agy` ou à l'usage, pas une conclusion ferme ici.
+- **Typage explicite des variables catégorielles** (`svy.Cat("urbrur")` dans `sample.glm.fit()`)
+  — renforce la décision déjà prise (§8, angle mort ajouté par `agy`) de valider strictement le
+  typage des indicateurs (0/1 ou booléen, refus explicite sinon) : `svy` applique la même
+  discipline plus largement, à tout type de variable passé à l'API.
+- **Extras de packaging** (`pip install svy[report]`, `svy[all]`) pour des fonctionnalités
+  optionnelles lourdes (`great-tables` pour un rendu enrichi) — modèle à reprendre pour un futur
+  `afmpi[report]` (sortie formatée façon `mpitb`) plutôt que d'alourdir la dépendance de base.
+  Hors périmètre des phases actuelles, à noter pour le packaging final (§9, phase 7).
+
+### D. Conclusion — la barre de qualité à viser
+
+Un package « aussi complet que les meilleurs » du domaine ne se limite pas à l'exactitude
+numérique (déjà couverte, §8) : `svy` fixe la barre sur la **rigueur de la variance** (réplication,
+pas seulement linéarisation) et la **discipline de publication** (changelog réel, docs versionnées,
+releases fréquentes et documentées) ; `mpitbR` fixe la barre sur la **fidélité au patron
+statistique établi** (un seul point d'entrée `set` + `est`, résultats typés avec méthodes
+génériques). Aucun des deux ne fait de pauvreté multidimensionnelle — c'est entièrement le terrain
+d'`afmpi`, mais la qualité d'ingénierie autour doit être à ce niveau, pas en dessous.
+
+**Actions concrètes qui en découlent, au-delà de ce qui était déjà dans le plan** :
+- §6 : `estimate()` porte `tvar=`/`cot_year=` au lieu d'un `compare_over_time()` séparé — fait.
+- §5 : `change_over_time.py` redevenu un module interne (pas une API utilisateur séparée) — fait.
+- Nouveau jalon de phasage à ajouter (au-delà de §9, à discuter avec `agy`) : méthodes de
+  variance par réplication (bootstrap, jackknife), après la phase 2 (plan de sondage complet) et
+  avant ou après la phase 4 (performance) selon ce qu'`agy` juge prioritaire.
+- README (déjà écrit par `Sol` pour la phase 1, à mettre à jour dans une prochaine passe) : ajouter
+  la note sur la convention des seuils k en fractions vs pourcentages (point B.4 ci-dessus), pour
+  éviter une confusion aux utilisateurs venant de `mpitb`/`mpitbR`.
+
+Sources consultées : [svylab.com/docs/svy](https://svylab.com/docs/svy),
+[PyPI — svy](https://pypi.org/project/svy/), [GitHub — samplics-org/svy](https://github.com/samplics-org/svy),
+[GitHub — girelaignacio/mpitbR](https://github.com/girelaignacio/mpitbR),
+[R Journal — mpitbR](https://journal.r-project.org/articles/RJ-2026-003/),
+[CRAN — survey package](https://cran.r-project.org/web/packages/survey/survey.pdf).
