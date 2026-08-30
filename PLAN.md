@@ -894,15 +894,15 @@ ajoute autant de surface que le cahier des charges du §4 le permettrait.
    par sous-population sans casser le design — §6), `over=[...]`, décomposabilité vérifiée par
    assertion (`Σφˡ·M0ˡ = M0`, `DECOMPOSITION_TOLERANCE = 1e-9`), `klist` (robustesse à k).
    Tests : domaines qui traversent les strates, très petits domaines.
-3.5. 🟡 **Jalon de conformité du noyau — gel méthodologique avant le v2** (ajouté sur relecture de
-   code par l'utilisateur, 2026-08-30, voir §15). Pas une nouvelle fonctionnalité : une preuve
-   que les phases 0-3 sont correctes avant de construire dessus. **Statut** : CI GitHub et rejet
-   PSU/strates manquants faits (via le stamp 4.5, §16) ; les trois subtilités (`degf()` sous
-   domaine, bornes `logit`, politique `missing`) déjà testées depuis `v0.2.0`. **Reste** : l'oracle
-   `survey` (R) sur le noyau de base lui-même (SRS, stratifié simple, un degré, domaines) — jamais
-   fait, voir le stamp dédié §17. Portée (sous-ensemble du tableau
-   de designs du §8.A qui s'applique à ce que le noyau couvre déjà — pas la matrice complète,
-   qui a besoin des phases 4a+) :
+3.5. ✅ **Jalon de conformité du noyau — gel méthodologique avant le v2** (fait, 2026-08-30, voir
+   §15 et §17). Pas une nouvelle fonctionnalité : une preuve que les phases 0-3 sont correctes
+   avant de construire dessus. CI GitHub et rejet PSU/strates manquants faits via le stamp 4.5
+   (§16) ; les trois subtilités (`degf()` sous domaine, bornes `logit`, politique `missing`)
+   déjà testées depuis `v0.2.0` ; l'oracle `survey` (R) sur le noyau de base (SRS, stratifié
+   simple, un degré, domaines) fait via le stamp 3.5-bis (§17, 131/131 tests). Le noyau 0-3 est
+   désormais gelé méthodologiquement — les phases 4a+ s'appuient dessus avec confiance. Portée
+   originelle (sous-ensemble du tableau de designs du §8.A qui s'applique à ce que le noyau
+   couvre déjà — pas la matrice complète, qui a besoin des phases 4a+) :
    - `survey` (R) comme oracle sur SRS, stratifié simple, un degré de grappes, et domaines —
      comparaison H/A/M0 **et** SE/IC/`degf()`, pas seulement les points (§8, principe central).
    - CI GitHub automatique (`pytest` à chaque push/PR) — le dépôt existe depuis la phase 0 mais
