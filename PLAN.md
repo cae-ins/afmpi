@@ -937,6 +937,16 @@ lu §14 sous son numéro.
 4c. **PSU isolé, les 5 comportements** : `fail`/`certainty`/`adjust`/`average`/`collapse` (§4),
     chacun testé séparément (sous-phase séparée, `Fable` 2026-08-30 — pas un seul comportement
     par défaut avec les autres en option non testée).
+4.5. **Stamp de durcissement — rattrapage du jalon 3.5 sur 4a-4c** (ajouté 2026-08-30, voir §16 —
+    ajouté sur relecture de code réel de 4a-4c par `agy`, le jalon 3.5 n'ayant en réalité jamais
+    été exécuté). Huit points, dans l'ordre : oracle `survey` (R) sur multi-stage+FPC à 10⁻¹⁰
+    près ; même oracle sur SYG/Hájek ; clarification du chemin PPS avec remise (Hansen-Hurwitz) ;
+    correction de l'appariement `joint_probability` du SYG (ambigu inter-strates) ;
+    `missing_design="error"` par défaut (strates/PSU/FPC manquants) ; CI GitHub
+    (`.github/workflows/`, Python 3.10/3.11/3.12) ; tests « hand-calculated » remplacés par de
+    vraies égalités numériques ; resynchronisation README/PLAN sur `v0.3.0`. **Bloque 5a** tant
+    que non fait — les deux branches d'inférence (Taylor, réplication) doivent s'adosser à un
+    socle audité, pas seulement testé en interne.
 5a. **`ReplicateDesign` — JK1/JKn** (§5, réévaluation par réplicat, PAS de linéarisation) : les
     méthodes de jackknife, les plus simples à valider, avant BRR (qui a besoin d'une matrice de
     Hadamard, `Fable` 2026-08-30).
@@ -2966,3 +2976,98 @@ explicite des PSU/strates manquants, validation des trois subtilités `degf()` s
 bornes de l'IC `logit`, et politique `missing` par défaut. Une fois ce jalon passé, le noyau 0-3
 est gelé méthodologiquement et les phases 4a+ (multi-degrés, FPC, PPS, réplications) peuvent
 s'appuyer dessus avec confiance plutôt que de risquer de propager un défaut non détecté.
+
+## 16. Stamp 4.5 — durcissement 4a-4c et rattrapage du jalon 3.5 (agy, 2026-08-30)
+
+Le jalon 3.5 (§9, §15) n'a en réalité jamais été exécuté : le commit `ebaa089` l'a seulement
+*ajouté au plan*, puis les phases 4a/4b/4c ont été livrées par-dessus (`de99e9c`, tag `v0.3.0`,
+123/123 tests) sans que le noyau ait été gelé méthodologiquement. Une relecture du code réel de
+4a-4c (pas seulement du plan) fait remonter huit lacunes concrètes, vérifiées en lisant le code
+(pas seulement affirmées) :
+
+1. **Aucun oracle externe** : `survey` (R) n'a jamais été exécuté contre le noyau, ni contre
+   4a-4c. C'est le point manquant le plus important (jalon 3.5, resté lettre morte).
+2. **Aucune CI GitHub** : pas de `.github/`, aucun statut de contrôle sur les commits — 123/123
+   tests locaux, zéro reproduction automatique (Python 3.10/3.11/3.12) à chaque push.
+3. **Identifiants de strates/PSU manquants acceptés silencieusement** : `deprivation.py:273,278,
+   294,301,306` fait `.fill_null("__afmpi_null__")` sur les colonnes strata/psu, y compris dans le
+   nouveau chemin multi-stage — une PSU inconnue devient une vraie PSU nommée `__afmpi_null__` au
+   lieu de lever une erreur. Contredit directement l'exigence du jalon 3.5.
+4. **FPC manquant traité comme fraction nulle** : `deprivation.py:336` fait
+   `.fill_null(0.0)` sur la colonne FPC — un FPC déclaré mais manquant pour une ligne doit lever
+   une erreur (sauf option explicite), pas silencieusement valoir « pas de correction de
+   population finie ».
+5. **PPS avec remise n'utilise pas explicitement `pi`** : `variance.py:332` (`_pps_variance`),
+   la branche `pps.method == "with_replacement"` retombe directement sur `multistage_variance(...,
+   depth=1)` sans passer par les probabilités d'inclusion. Défendable seulement si les poids
+   d'analyse encodent déjà complètement Hansen-Hurwitz — à clarifier/documenter explicitement,
+   pas à laisser implicite alors que le commit revendique « estimateurs de Hansen-Hurwitz ».
+6. **Sen-Yates-Grundy : appariement des PSU ambigu inter-strates** : `variance.py:380-385`
+   récupère l'identifiant PSU via `c_id = row["__psu_str"].split("|")[-1]` puis l'apparie dans
+   `joint_probability`, qui n'est indexé que par `psu_a`/`psu_b`/`pi_ab` — si deux strates
+   différentes ont chacune une « PSU 1 »/« PSU 2 » avec des `pi_ij` différentes, l'appariement est
+   ambigu. Corriger en indexant `joint_probability` par `stratum, psu_a, psu_b, pi_ab`, ou en
+   imposant des identifiants PSU globalement uniques (préférer la première option).
+   Concerne aussi Hájek (`variance.py:401`).
+7. **Les tests « hand-calculated » ne vérifient pas de valeur calculée à la main** : dans
+   `tests/test_multistage.py` (`test_hand_calculated_2stage_example`, lignes 90-139),
+   `tests/test_pps.py` (`test_sen_yates_grundy_hand_calculated` et le test Hájek, lignes 50-139),
+   l'assertion finale est `assert m0_row["se"] > 0` — une formule fausse de 20 % passerait ces
+   tests sans échouer. Le nom du test promet une comparaison à une valeur exacte (10⁻¹⁰ ou
+   10⁻¹² près) qui n'existe pas dans le corps du test. `tests/test_lonely_psu.py` et
+   `tests/test_domain.py` ont le même défaut ponctuellement mais sont moins critiques (4c est
+   déjà mieux couvert par ailleurs — voir tableau ci-dessous).
+8. **Documentation publique en retard sur le code livré** : `README.md:138,151-152` annonce
+   encore la version `0.2.0` et dit explicitement non implémentés les plans multi-degrés, FPC,
+   PPS et grappes isolées — alors que `de99e9c`/tag `v0.3.0` les a livrés. À resynchroniser.
+
+### Notation actualisée à 4c (agy, sur le code réel, pas le plan)
+
+| Axe | Phase 3 (§15) | Phase 4c actuelle |
+|---|---|---|
+| AF ponctuel H/A/M0/contributions | 9,5 | 9,5 |
+| Architecture interne | 9,5 | 9,5 |
+| Taylor 1 degré | 8,5 | 9 |
+| Domaines | 9,5 | 9,5 |
+| Multi-stage (formule) | 0 | 7,5 |
+| FPC | 0 | 7,5 |
+| PPS (WR, WOR/Hájek, SYG) | 0 | 6,5 |
+| PSU isolé (5 comportements) | 0 | 8,5 |
+| Tests internes | 9,5 | 9 |
+| Validation externe | 5 | 5 |
+| CI/reproductibilité | 3 | 3 |
+| Big data opérationnel | 3 | 3 |
+| Préparation architecturale big data | 9 | 9 |
+
+La légère baisse de « tests internes » ne signifie pas une régression : la complexité
+méthodologique (multi-stage, PPS) a augmenté plus vite que la profondeur des tests qui la couvrent.
+
+### Décision : stamp 4.5 avant 5a
+
+**Ne pas commencer 5a (réplication) avant d'avoir traité les huit points ci-dessus.** Objectif du
+stamp 4.5 : que 0-4c devienne un socle *survey* réellement gelé méthodologiquement — pas
+seulement architecturalement solide — avant d'y adosser les deux branches d'inférence
+(linéarisation Taylor déjà là, réplication à venir en 5a-5c). Portée du stamp 4.5, dans l'ordre :
+
+1. Oracle `survey` (R) : comparaison H/A/M0 **et** SE/IC/`degf()` sur multi-stage + FPC, avec au
+   moins un exemple à deux degrés dont `Var(H)`, `Var(A)`, `Var(M0)` sont connues à 10⁻¹⁰ près.
+2. Même oracle pour SYG et Hájek (PPS WOR) — pas seulement l'invariant algébrique
+   `pi_ij = pi_i * pi_j ⇒ V=0`, qui n'est qu'un cas dégénéré, pas une validation générale.
+3. Clarifier/documenter (ou corriger si besoin) le chemin PPS avec remise : soit prouver que les
+   poids d'analyse encodent bien Hansen-Hurwitz, soit faire passer `pi` explicitement dans le
+   calcul de variance.
+4. Corriger l'appariement `joint_probability` du SYG pour qu'il soit non ambigu inter-strates
+   (indexer par `stratum, psu_a, psu_b, pi_ab`).
+5. `missing_design="error"` par défaut : rejeter (erreur explicite) les strates/PSU/FPC manquants
+   au lieu de `fill_null`, avec une option explicite pour un traitement différent si un jour
+   nécessaire.
+6. Ajouter la CI GitHub (`.github/workflows/`) : `pytest` sur Python 3.10/3.11/3.12 à chaque
+   push/PR — ne pas la reporter à la phase 11.
+7. Remplacer les assertions `se > 0` des tests « hand-calculated » par de vraies égalités
+   numériques (tolérance 10⁻⁸ à 10⁻¹⁰) dans `test_multistage.py`, `test_pps.py`, et par extension
+   `test_lonely_psu.py`/`test_domain.py` où le nom du test promet une valeur exacte.
+8. Resynchroniser `README.md` et l'en-tête de `PLAN.md` sur l'état réel (`v0.3.0`, 4a-4c livrés).
+
+**Si ces huit points passent** : 0-4c est un socle *survey* gelé méthodologiquement, et 5a-5c
+(réplication) peut s'appuyer dessus avec confiance — les deux grandes branches d'inférence
+(Taylor et réplication) reposeront alors sur un estimateur et un chemin déjà audités.
