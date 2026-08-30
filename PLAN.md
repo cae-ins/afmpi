@@ -601,6 +601,34 @@ pèse déjà 228 Mo pour seulement 64 491 lignes après fusion large — voir
 ne tiendrait pas la charge sur un recensement de plusieurs millions d'individus sans repenser le
 moteur de calcul.
 
+### Constat sur `afmpi` lui-même, après le noyau v1 (relecture de code, utilisateur, 2026-08-30)
+
+**Distinction à garder à l'esprit pendant les phases 4a-12 : « architecture compatible big data »
+et « big data effectivement opérationnel » ne sont pas la même chose.** Le noyau v1 (phases 0-3)
+est écrit en Polars, mais :
+
+- `estimate()` prend `df: pandas.DataFrame | polars.DataFrame` — **pas de `LazyFrame`**. Le
+  moteur construit une `DeprivationMatrix` qui contient un `pl.DataFrame` **matérialisé**, et
+  `EstimationResult` garde cette matrice complète (`_matrix: DeprivationMatrix`) pour pouvoir
+  rejouer `result.domain(...)` et `result.scores()` après coup. Sur 50 000 ménages, aucun
+  problème. Sur 30 millions de personnes, ce modèle ne peut pas rester tel quel : un résultat
+  statistique de quelques kilooctets garderait en vie un DataFrame de plusieurs dizaines de Go.
+  **La phase 9 devra séparer `InMemoryResult` (comportement actuel, conservé pour les enquêtes de
+  taille normale) d'un `Lazy`/`StreamingResult`** qui ne conserve pas la base préparée — ou, au
+  minimum, faire en sorte qu'un `EstimationResult` standard ne retienne pas automatiquement toute
+  la base.
+- `_estimate_from_matrix()` boucle sur les seuils `k` et, pour chaque `k`, refait un
+  `cluster_sums()` complet par variable de désagrégation. Avec 8 seuils × région × département ×
+  sous-préfecture, ça fait plusieurs agrégations intégrales de la base. Sans importance sur
+  l'EHCVM ; potentiellement très coûteux sur un recensement. **La phase 9 devra compiler tous les
+  `k` et toutes les sorties de désagrégation dans un seul plan Polars (ou un nombre minimal de
+  scans)**, pas une boucle d'agrégations indépendantes.
+
+Aucun des deux n'est un problème de la phase 3 — le noyau v1 vise la correction statistique, pas
+la performance (§9, ordre des phases). Mais ce sont des exigences concrètes, pas des vœux
+pieux, pour la phase 9 : la section « Choix technique » ci-dessous doit être relue à cette
+lumière une fois cette phase abordée.
+
 ### Choix technique proposé
 
 - **Backend principal : [Polars](https://pola.rs)**, pas pandas. Colonne-orienté, multi-thread
@@ -869,9 +897,31 @@ ajoute autant de surface que le cahier des charges du §4 le permettrait.
    par sous-population sans casser le design — §6), `over=[...]`, décomposabilité vérifiée par
    assertion (`Σφˡ·M0ˡ = M0`, `DECOMPOSITION_TOLERANCE = 1e-9`), `klist` (robustesse à k).
    Tests : domaines qui traversent les strates, très petits domaines.
+3.5. **Jalon de conformité du noyau — gel méthodologique avant le v2** (ajouté sur relecture de
+   code par l'utilisateur, 2026-08-30, voir §15). Pas une nouvelle fonctionnalité : une preuve
+   que les phases 0-3 sont correctes avant de construire dessus. Portée (sous-ensemble du tableau
+   de designs du §8.A qui s'applique à ce que le noyau couvre déjà — pas la matrice complète,
+   qui a besoin des phases 4a+) :
+   - `survey` (R) comme oracle sur SRS, stratifié simple, un degré de grappes, et domaines —
+     comparaison H/A/M0 **et** SE/IC/`degf()`, pas seulement les points (§8, principe central).
+   - CI GitHub automatique (`pytest` à chaque push/PR) — le dépôt existe depuis la phase 0 mais
+     n'a pas encore de workflow ; à ajouter ici, pas reporté à la phase 11.
+   - **Rejet explicite** (erreur, pas une valeur par défaut silencieuse) quand `psu`/`strata` sont
+     absents d'un `SurveyDesign` alors que le calcul en a besoin — vérifier que c'est déjà le cas
+     dans `survey_design.py`/`variance.py`, sinon corriger.
+   - Validation ciblée de trois subtilités déjà implémentées mais pas explicitement testées comme
+     telles : `degf()` sous un domaine (le compte doit porter sur les grappes/strates que le
+     domaine atteint réellement, pas sur le design complet — §6), le comportement aux bornes de
+     l'IC `logit` (proche de 0 ou 1, où `normal`/`t` peuvent sortir de `[0,1]`), et la politique
+     `missing` par défaut (`listwise`, §4) appliquée correctement dans `deprivation.py`.
 
-*(Fin du noyau v1. Les phases suivantes élargissent le cahier des charges vers le v2 complet du
-§4 — chacune est un ajout de surface indépendant, pas un correctif du noyau.)*
+   **Si ce jalon passe** : le noyau 0-3 est gelé méthodologiquement — les phases 4a+ construisent
+   dessus avec confiance, sans revisiter ses formules. **S'il ne passe pas** : corriger le noyau
+   avant toute phase 4a+, jamais construire par-dessus un défaut connu.
+
+*(Fin du noyau v1, gelé une fois 3.5 passé. Les phases suivantes élargissent le cahier des
+charges vers le v2 complet du §4 — chacune est un ajout de surface indépendant, pas un correctif
+du noyau.)*
 
 **Chaque phase ci-dessous a sa spécification exécutable au §14, sous le même numéro** (phase 4a →
 §14.4a, phase 7 → §14.7, etc.). Les entrées ci-dessous restent le *périmètre* de la phase ; §14
@@ -2815,3 +2865,61 @@ méthodes namespacées (§12.C), noms français vs anglais (§12.C), adaptateur 
 performance chiffrée (§14.9), construction de la matrice de Hadamard (§14.5b), règle de fusion de
 `"collapse"` (§14.4c), interprétation du `fpc` (§14.4a), estimateur PPS par défaut (§14.4b) et
 règle des degrés de liberté par cas (§14.7).
+
+## 15. Relecture de code du noyau v1 et jalon 3.5 (utilisateur, 2026-08-30)
+
+Après la livraison du noyau v1 (phases 0-3, tag `v0.2.0`, 104/104 tests), l'utilisateur a relu le
+code réellement produit — pas seulement le plan — et formulé un constat et une recommandation
+avant d'aborder les phases 4a+. Le jalon de conformité qui en résulte est déjà intégré au
+phasage (§9, phase 3.5) ; les deux limitations techniques identifiées sont déjà intégrées au §7.
+Cette section documente le raisonnement et le verdict, pour l'audit.
+
+### A. Deux limitations concrètes du code livré (déjà répercutées en §7)
+
+1. **Le noyau v1 n'est pas encore « big data », il en a l'architecture** — distinction à ne pas
+   confondre : `EstimationResult` retient actuellement toute la `DeprivationMatrix` matérialisée
+   (nécessaire à `domain()`/`scores()` après coup), et `estimate()` n'accepte pas encore de
+   `LazyFrame`. Correct et voulu à cette échelle (v1 = enquêtes de taille normale) ; à traiter
+   explicitement en phase 9, pas en corrigeant discrètement le noyau plus tard.
+2. **Le calcul multi-`k` × multi-désagrégation refait une agrégation complète par combinaison** —
+   sans conséquence sur l'EHCVM, potentiellement coûteux sur un recensement (8 seuils × 3 niveaux
+   de désagrégation = de nombreux scans complets). À compiler en un plan Polars unique en phase 9.
+
+### B. Où se situe `afmpi` aujourd'hui, selon l'utilisateur
+
+> « Si je compare ce qui existe réellement maintenant : mpitb/mpitbR > afmpi 0.2 en couverture
+> méthodologique totale — normal à 3/12. Mais pour la qualité du socle Python, je dirais déjà :
+> afmpi est désormais crédible, et beaucoup plus crédible que le mpitb Python disponible sur
+> PyPI. [...] Le point qui me rend plutôt confiant est que les trois premières phases ont traité
+> les fondations difficiles — estimands génériques, influence functions, séparation
+> Taylor/réplication, domaines — au lieu de simplement accumuler des fonctionnalités. »
+
+Notation par axe (utilisateur, 2026-08-30, sur le code réellement livré des phases 0-3, pas sur
+le plan) :
+
+| Axe | Note |
+|---|---|
+| Formules AF | 9,5/10 |
+| Architecture interne | 9,5/10 |
+| Linéarisation | 9/10 |
+| Plan à un degré | 8,5/10 |
+| Domaines | 9,5/10 |
+| Tests unitaires/mathématiques | 9,5/10 |
+| Validation externe | 5/10 |
+| Couverture des plans complexes | 5/10 |
+| Big data effectivement disponible | 3/10 |
+| Préparation architecturale big data | 9/10 |
+
+Les notes faibles (validation externe, plans complexes, big data opérationnel) sont **attendues**
+à ce stade (3 phases sur 12) — elles ne mesurent pas un défaut, seulement ce qui n'est pas encore
+construit. C'est exactement le jalon 3.5 (§9) qui doit faire remonter « validation externe »
+avant que les phases 4a+ ne s'appuient dessus.
+
+### C. Recommandation adoptée
+
+Ne pas changer la feuille de route générale (§9) ; insérer le jalon de conformité 3.5 avant la
+phase 4a (fait, §9) : `survey` (R) comme oracle sur le noyau actuel, CI GitHub automatique, rejet
+explicite des PSU/strates manquants, validation des trois subtilités `degf()` sous domaine,
+bornes de l'IC `logit`, et politique `missing` par défaut. Une fois ce jalon passé, le noyau 0-3
+est gelé méthodologiquement et les phases 4a+ (multi-degrés, FPC, PPS, réplications) peuvent
+s'appuyer dessus avec confiance plutôt que de risquer de propager un défaut non détecté.
