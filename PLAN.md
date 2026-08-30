@@ -2710,6 +2710,74 @@ def totals_lazy(lf, estimands, weight=None) -> pl.LazyFrame
 `estimate(..., lazy=True)` renvoie un `LazyEstimation` portant `.collect() -> EstimationResult`.
 `LazyEstimation` ne fait **aucune** validation coûteuse à la construction : c'est tout son intérêt.
 
+#### Budget de ressources explicite (`ExecutionConfig`) — relecture externe, utilisateur/agy, 2026-08-31
+
+« Utiliser Polars donc ça ira » n'est pas une conception : c'est le point soulevé par la
+relecture. Exigence normative : la taille des données ne doit **pas** faire croître la RAM
+nécessaire proportionnellement (`taille ↑ ⇏ RAM ↑ proportionnellement`), et le passage à
+l'échelle recensement doit être **conçu** avec un budget de ressources explicite, pas ajusté
+après coup.
+
+```python
+@dataclass(frozen=True, slots=True)
+class ExecutionConfig:
+    max_threads: int | None = None      # None = comportement Polars par défaut
+    memory_limit: str | None = None     # ex. "8GB" — budget indicatif de chunking, pas une garantie OS
+    spill_dir: str | None = None        # répertoire d'écriture temporaire du moteur streaming
+    batch_size: int | None = None       # remplace le batch_size=64 codé en dur de generate_replicate_weights/replicate_totals (§14.5a)
+```
+
+`estimate(..., resources=ExecutionConfig(...))`, et `ParquetSource.estimate(..., resources=...)`.
+Défaut (`resources=None`) : comportement actuel inchangé — cette phase ajoute un plafond
+possible, elle ne change pas le comportement par défaut du code déjà livré.
+
+**Contrainte technique réelle à documenter, pas à cacher** : Polars gère son pool de threads au
+niveau du *processus*, pas par appel (`POLARS_MAX_THREADS`, lu une fois à la première opération
+Polars du processus). `max_threads` ne peut donc pas garantir un plafond différent pour deux
+appels concurrents `estimate()` dans le même processus Python. Vérifier contre la version de
+Polars réellement installée (`polars>=1.0` dans `pyproject.toml`, pin large) ce qui est
+effectivement réglable par appel (taille de lot du moteur streaming, `pl.Config`) par opposition
+à ce qui ne l'est qu'au niveau processus — et **documenter explicitement la différence** dans le
+docstring d'`ExecutionConfig` et le README, plutôt que de promettre une isolation par appel qui
+n'existe pas. `memory_limit` est de la même nature : un budget indicatif qui pilote la taille des
+lots (`batch_size`, taille de chunk du moteur streaming), pas une limite dure garantie par l'OS —
+documenter aussi cette nuance, ne pas la présenter comme un plafond garanti.
+
+**Trois modes explicites**, à documenter dans le README (tableau) :
+
+| Mode | Comportement |
+|---|---|
+| `memory` (défaut hors `CensusDesign`/`lazy=True`/`from_parquet`) | données déjà en mémoire, comportement des phases 0-8 inchangé |
+| `lazy` (`estimate(..., lazy=True)`) | calcul paresseux, *projection*/*predicate pushdown*, deux passages du §14.9 |
+| `streaming` (`from_parquet(..., streaming=True)`, défaut de `from_parquet`) | mémoire plafonnée par lots, `spill_dir` si le moteur streaming de Polars le permet à la version installée |
+
+Pour un `ParquetSource` (fichier volumineux, cas recensement), le mode par défaut est
+`lazy + streaming` — **pas** « tout charger puis filtrer » — conformément à la cible du §7 et au
+retour de la relecture externe.
+
+**Réplication à l'échelle recensement** : `batch_size` (déjà en place depuis 5a, défaut 64,
+§14.5a) reste le mécanisme qui empêche de matérialiser une matrice `N×R` — cette phase le rend
+configurable via `ExecutionConfig.batch_size` plutôt que de le changer de nature. Avec `N=40M` et
+`R=200`, la mémoire des réplicats doit rester en `O(N_lot + R_lot)`, jamais en `O(N·R)` — déjà
+vrai par construction du code de 5a, à revalider explicitement à cette échelle dans le test de
+performance de cette phase (pas un nouveau mécanisme, une preuve chiffrée que le mécanisme
+existant tient à l'échelle recensement).
+
+**`CensusDesign` — retirer la machinerie survey inutile du chemin critique** (déjà en grande
+partie normatif ci-dessus : pas de `group_by` par grappe/strate, `se=0` partout) : sur ce chemin,
+aucune fonction d'influence, aucune notion de PSU/strate/FPC, aucun poids de réplicat, aucune
+VCOV *survey* n'entre dans le calcul — le moteur se réduit à
+`privation → score → agrégation → H/A/M0/contributions`, déjà ce que prescrit le paragraphe
+`CensusDesign` ci-dessus ; cette section ne fait qu'expliciter que c'est aussi une exigence de
+*performance*, pas seulement de sémantique statistique.
+
+**Mesure des benchmarks — trois chiffres, pas un seul** : le rapport de benchmark (README,
+`benchmarks/`) doit consigner **temps, pic de RAM, et utilisation CPU** (nombre de cœurs
+effectivement mobilisés, pas seulement le total de cœurs de la machine), pas seulement le temps
+d'exécution — modifier la section « Ce qui est mesuré et la cible chiffrée » ci-dessous en
+conséquence : ajouter la mesure CPU aux mesures (a)-(e) déjà listées, avec le nombre de threads
+Polars effectivement observé pendant le benchmark (`POLARS_MAX_THREADS` ou équivalent constaté).
+
 #### Jeu de données de référence (`benchmarks/generate_census.py`)
 
 Dimensions figées, pour que les chiffres publiés soient comparables d'une exécution à l'autre :
@@ -2722,11 +2790,14 @@ Dimensions figées, pour que les chiffres publiés soient comparables d'une exé
 Charge : (a) chargement, (b) H/A/M0 national, (c) les trois désagrégations (33, 108, 442),
 (d) contributions par indicateur, (e) robustesse à 8 seuils `k`.
 
-**Cible normative** : (b)-(e) en **moins de 300 secondes** et **moins de 8 Go** de pic mémoire
-résident sur une machine de bureau ordinaire. C'est la traduction chiffrée du « quelques minutes,
-quelques Go » du §7, qui fait foi (§13.A.6) ; le « moins de 30 s / moins de 2 Go » du §10 est
-l'estimation antérieure d'`agy`, conservée pour l'exactitude historique du compte rendu mais
-**non normative**.
+**Cible normative** : (b)-(e) en **moins de 300 secondes**, **moins de 8 Go** de pic mémoire
+résident, et un nombre de threads Polars effectivement mobilisés cohérent avec
+`ExecutionConfig(max_threads=8)` quand elle est fournie (pas de mobilisation implicite de tous
+les cœurs de la machine de benchmark) — sur une machine de bureau ordinaire. C'est la traduction
+chiffrée du « quelques minutes, quelques Go » du §7, qui fait foi (§13.A.6) ; le « moins de 30 s /
+moins de 2 Go » du §10 est l'estimation antérieure d'`agy`, conservée pour l'exactitude
+historique du compte rendu mais **non normative**. Le rapport de benchmark consigne les **trois**
+chiffres — temps, pic RAM, threads effectivement observés — jamais le temps seul.
 
 Le test correspondant est marqué `@pytest.mark.slow` et **exclu de l'exécution par défaut** :
 ajouter à `pyproject.toml`
@@ -2797,6 +2868,12 @@ variables de désagrégation. Le chemin en mémoire des phases 0-3 (petites donn
 9. Pour un jeu de test à plusieurs `k` et plusieurs variables `over`, le nombre d'appels de
    lecture/scan du fichier source (instrumenté ou compté via le plan d'exécution Polars) ne
    croît pas avec le nombre de `k` ni le nombre de variables `over`.
+10. `ExecutionConfig(batch_size=N)` change effectivement le nombre de réplicats traités par lot
+    dans `replicate_totals` (vérifié par un compteur d'appels espionné, même style que le test
+    §14.5a sur `batch_size` — pas par chronométrage).
+11. `resources=None` (défaut) donne un résultat identique au bit près à un appel équivalent
+    sans le paramètre — cette phase n'altère aucun résultat déjà livré, seulement les ressources
+    consommées pour l'obtenir.
 
 ---
 
