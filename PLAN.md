@@ -968,8 +968,8 @@ lu §14 sous son numéro.
     des fichiers de poids de réplicat déjà produits par une institution. Rigueur de validation à
     égaler avec `svy` (§12) : comparer contre `survey` (R) à haute précision, documenter tout
     écart chiffré dans un `CHANGELOG.md`.
-6a. **Évolution dans le temps — échantillons indépendants** : paramètres `tvar=`/`cot_year=` de
-    `estimate()` (§6, §12), deltas absolus/relatifs/annualisés.
+6a. ✅ **Évolution dans le temps — échantillons indépendants** (fait, 2026-08-30, 179/179 tests) :
+    paramètres `tvar=`/`cot_year=` de `estimate()` (§6, §12), deltas absolus/relatifs/annualisés.
 6b. **Évolution dans le temps — panels et échantillons chevauchants** (sous-phase à part entière,
     pas une option de 6a — utilisateur, 2026-08-30, §6) : covariance inter-vagues
     `Var(Δ) = Var(t+1) + Var(t) − 2·Cov(t+1,t)`, reconnue à partir d'identifiants de panel/PSU

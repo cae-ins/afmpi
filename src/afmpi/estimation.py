@@ -16,7 +16,7 @@ from numbers import Real
 import pandas as pd
 import polars as pl
 
-from . import deprivation, domain as domain_module, estimands as estimands_module
+from . import change_over_time, deprivation, domain as domain_module, estimands as estimands_module
 from . import linearization
 from .deprivation import DeprivationMatrix
 from .design_base import Design
@@ -81,6 +81,8 @@ def estimate(
     *,
     k: float | Sequence[float] = 1 / 3,
     over: str | Sequence[str] | None = None,
+    tvar: str | None = None,
+    cot_year: str | None = None,
     domain: str | pl.Expr | None = None,
     ci_method: str = "logit",
     level: float = 0.95,
@@ -95,16 +97,27 @@ def estimate(
     if ci_method not in CI_METHODS:
         raise ValueError(f"ci_method must be one of {CI_METHODS}; got {ci_method!r}")
 
+    temp_frame = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+    change_over_time.validate_time_variables(temp_frame, tvar, cot_year)
+
+    required_vars = list(variables)
+    if tvar is not None:
+        required_vars.append(tvar)
+    if cot_year is not None:
+        required_vars.append(cot_year)
+
     matrix = deprivation.build(
         df,
         spec,
         design,
-        required_columns=tuple(variables) + design.design_columns,
+        required_columns=tuple(required_vars) + design.design_columns,
     )
     return _estimate_from_matrix(
         matrix,
         cutoffs=cutoffs,
         variables=variables,
+        tvar=tvar,
+        cot_year=cot_year,
         domain=domain,
         ci_method=ci_method,
         level=level,
@@ -130,6 +143,8 @@ def _estimate_from_matrix(
     *,
     cutoffs: tuple[float, ...],
     variables: tuple[str, ...],
+    tvar: str | None = None,
+    cot_year: str | None = None,
     domain: str | pl.Expr | None,
     ci_method: str,
     level: float,
@@ -406,6 +421,18 @@ def _estimate_from_matrix(
     if check_decomposability and decomposition_frame.height:
         _assert_decomposable(decomposition_frame)
 
+    changes_frame = None
+    if tvar is not None:
+        changes_frame = change_over_time.compute_changes(
+            matrix,
+            cutoffs=cutoffs,
+            variables=variables,
+            tvar=tvar,
+            cot_year=cot_year,
+            ci_method=ci_method,
+            level=level,
+        )
+
     return EstimationResult(
         _estimates=estimates,
         _decomposition=decomposition_frame,
@@ -415,6 +442,9 @@ def _estimate_from_matrix(
         _domain=(base.over, base.subgroup) if not base.is_population else None,
         _ci_method=ci_method,
         _level=level,
+        _tvar=tvar,
+        _cot_year=cot_year,
+        _changes=changes_frame,
         observations=matrix.observations,
         excluded_observations=matrix.excluded_observations,
     )

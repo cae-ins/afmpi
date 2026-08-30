@@ -83,6 +83,8 @@ result = estimate(
     data, spec, design,
     k=[0.20, 1 / 3, 0.50],   # fractions, pas des pourcentages
     over=["region", "milieu"],
+    tvar="wave",             # colonne identifiant la vague
+    cot_year="year",         # année civile de la vague (optionnel)
     ci_method="logit",       # "logit" (défaut), "t" ou "normal"
 )
 
@@ -92,6 +94,7 @@ result.confint()       # estimations et bornes
 result.degf()          # degrés de liberté par contexte de design
 result.contributions() # H_j, CH_j, actb_j, pctb_j et leurs erreurs-types
 result.decomposition() # contrôle de décomposabilité Σ φˡ·M0ˡ = M0
+result.changes()       # variations brutes, relatives et annualisées entre vagues
 ```
 
 Chaque variable de `over=` produit sa propre ventilation à une dimension (pas un croisement),
@@ -100,6 +103,12 @@ comme `over = c("area", "region")` dans `mpitb`.
 **Convention des seuils `k`** : `afmpi` attend des **fractions entre 0 et 1** (`1/3`), là où
 `mpitb`/`mpitbR` attendent des pourcentages entiers (`33`). C'est un écart assumé, plus
 idiomatique en Python ; il n'y a pas de conversion implicite.
+
+### Évolution dans le temps : échantillons indépendants (`changes()`)
+
+Lorsque des données multi-vagues sont fournies avec `tvar="col_vague"` (et optionnellement `cot_year="col_annee"`), `result.changes()` renvoie les changements bruts (`abs`), relatifs (`rel`), annualisés bruts (`ann_abs`) et annualisés composés (`ann_rel`) entre chaque paire de vagues consécutives et entre la première et la dernière vague.
+
+Les vagues sont estimées comme des domaines sur l'ensemble de l'échantillon. Pour les lignes de changement, les bornes d'intervalles de confiance ne sont pas tronquées à `[0, 1]` (`bounded=False`) et la méthode `ci_method="logit"` est silencieusement remplacée par `"t"` (car la transformation logit n'est pas définie pour des différences pouvant être négatives).
 
 ### Sous-populations : `domain()`, jamais un filtre
 
@@ -157,7 +166,7 @@ Le tableau ci-dessous illustre la déclaration pour quatre cas d'usage instituti
 
 ## État actuel et roadmap
 
-La version actuelle couvre le **noyau v1, les plans complexes (phases 0 à 4c + stamp 4.5) et les plans de réplication (phase 5a/5b/5c)** ([`PLAN.md`](PLAN.md) §9, §14, §16) :
+La version actuelle couvre le **noyau v1, les plans complexes (phases 0 à 4c + stamp 4.5), les plans de réplication (phase 5a/5b/5c) et l'évolution dans le temps pour échantillons indépendants (phase 6a)** ([`PLAN.md`](PLAN.md) §9, §14, §16) :
 
 - spécification des dimensions et pondérations égales imbriquées ou personnalisées ;
 - politiques de valeurs manquantes `listwise_deletion` et `reweighting` ;
@@ -173,11 +182,11 @@ La version actuelle couvre le **noyau v1, les plans complexes (phases 0 à 4c + 
 - erreurs-types, IC `normal`/`t`/`logit`, degrés de liberté explicites ;
 - estimation par domaine et par sous-groupe sans casser le plan, plusieurs seuils `k`,
   vérification automatique de la décomposabilité ;
+- mesure de l'évolution dans le temps entre vagues d'échantillons indépendants (`tvar`, `cot_year`, `.changes()`) ;
 - validation numérique croisée exacte contre le package `survey` (R 4.5.3) documentée dans `tests/oracle/` ;
 - intégration continue GitHub Actions (`.github/workflows/tests.yml`) sur Python 3.10, 3.11 et 3.12.
 
-Ne sont pas encore implémentés : la matrice de variance-covariance complète et les tests de Wald (phase 7), la comparaison de plusieurs vagues
-dans le temps (phase 6), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9).
+Ne sont pas encore implémentés : la matrice de variance-covariance complète et les tests de Wald (phase 7), la comparaison de panneaux/échantillons chevauchants (phase 6b), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9).
 Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 6 à 12.
 
 ## Attribution et licence

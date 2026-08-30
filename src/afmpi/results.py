@@ -39,8 +39,11 @@ class EstimationResult:
     _domain: tuple[str | None, str | None] | None
     _ci_method: str
     _level: float
-    observations: int
-    excluded_observations: int
+    _tvar: str | None = None
+    _cot_year: str | None = None
+    _changes: pl.DataFrame | None = None
+    observations: int = 0
+    excluded_observations: int = 0
 
     # ------------------------------------------------------------------ state
 
@@ -200,6 +203,13 @@ class EstimationResult:
 
         return self._convert(self._decomposition.clone())
 
+    def changes(self):
+        """Absolute, relative and annualised changes between waves (PLAN.md §14.6a)."""
+
+        if self._changes is None:
+            raise ValueError("no time variable was declared")
+        return self._convert(self._changes.clone())
+
     def domain(self, expression: str | pl.Expr):
         """Re-estimate on a subpopulation without breaking the design.
 
@@ -214,6 +224,8 @@ class EstimationResult:
             self._matrix,
             cutoffs=self._cutoffs,
             variables=self._over,
+            tvar=self._tvar,
+            cot_year=self._cot_year,
             domain=expression,
             ci_method=self._ci_method,
             level=self._level,
