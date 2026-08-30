@@ -472,17 +472,38 @@ décision déjà prise sur `samplics` :
   documentation. Aucun chevauchement sur le cœur de valeur d'`afmpi`, seulement sur la brique
   « plan de sondage + variance » qui le sous-tend.
 
-**Décision recommandée** (à confirmer par `agy`/l'utilisateur, pas figée) : **ne pas dépendre de
-`svy` en dur** dans `afmpi` — c'est un package encore pré-1.0 (0.26.0), à la vitesse de
-publication élevée (donc surface d'API pas stabilisée), avec une dépendance Rust compilée
-(`svy-rs`, roues binaires par plateforme) qui alourdit l'installation d'un package qui vise la
-simplicité (`pip install afmpi`). En revanche, **`afmpi` doit égaler sa rigueur sur la variance**
-dans un jalon dédié (au-delà de la phase 2 déjà prévue) : ajouter les méthodes de réplication
-(bootstrap et jackknife au minimum ; BRR et SDR si le temps le permet), implémentées nativement
-en Polars, en citant `svy` comme référence de correction (comparer les erreurs-types obtenues sur
-un même jeu de test). Interopérabilité à bas coût à envisager plus tard : accepter en entrée un
-objet `svy.Sample`/`svy.Design` déjà construit, pour les utilisateurs déjà dans cet écosystème,
-sans que `afmpi` en dépende pour fonctionner seul.
+**Métadonnées vérifiées le 2026-08-30** (GitHub API, PyPI, changelog du dépôt), pour trancher sur
+des faits plutôt que sur une impression :
+
+| Signal | Constat |
+|---|---|
+| CI | 5 workflows GitHub Actions réels (tests + build de roues, y compris pour `svy-rs`) |
+| Rigueur de validation | changelog documente des comparaisons à `survey` (R) jusqu'à 10⁻¹² – 10⁻¹⁴ (12-14 chiffres significatifs), avec des cas de correction de bugs chiffrés (ex. écart-type sous-estimé d'un facteur `1/√(1−15/757)` sur un test FPC) |
+| Licence | MIT |
+| Adoption PyPI | ~3 300 téléchargements/mois, ~1 400/semaine (réel, mais modeste) |
+| Communauté GitHub | créé 2026-01 (8 mois), **20 étoiles, 0 fork, 2 contributeurs**, 1 seul Release GitHub formel malgré ~45 versions PyPI |
+| Stabilité de l'API | la section « Unreleased » du changelog contient **plusieurs breaking changes en cours** (`by=`→`cells=`, `factors=`→`shares=`, comportement de `controls` changé) — l'auteur documente lui-même que le vocabulaire de l'API bouge encore |
+
+**Décision recommandée, inchangée sur le fond mais désormais fondée sur des faits vérifiés** (à
+confirmer par `agy`/l'utilisateur) : **ne pas dépendre de `svy` en dur** dans `afmpi` — pas par
+méfiance envers l'auteur (l'utilisateur le connaît personnellement, ce qui atténue le risque
+« bus factor » et ouvre la porte à un contact direct sur la feuille de route), mais parce que
+l'instabilité de l'API est un fait documenté par le projet lui-même, indépendant de qui l'a
+écrit : un package qui vise `pip install afmpi` simple et stable ne peut pas dépendre en dur
+d'une surface d'API qui change de vocabulaire d'une version à l'autre. **Déclencheur explicite
+pour revisiter cette décision** : `svy` atteint 1.0 (ou publie un engagement de stabilité d'API/
+politique de dépréciation), ou une conversation directe avec l'auteur clarifie sa feuille de
+route de stabilisation.
+
+En attendant, **`afmpi` doit égaler sa rigueur sur la variance** dans un jalon dédié (au-delà de
+la phase 2 déjà prévue, §9 point 6) : ajouter les méthodes de réplication (bootstrap et jackknife
+au minimum ; BRR et SDR si le temps le permet), implémentées nativement en Polars, **et reprendre
+la même discipline de validation** — comparer contre `survey` (R) à haute précision (viser un
+ordre de grandeur similaire, pas juste 1e-6 comme le reste du plan, §8) et documenter tout écart
+chiffré dans un `CHANGELOG.md` à la façon de `svy`, plutôt qu'un simple « corrigé » sans détail.
+Interopérabilité à bas coût à envisager plus tard : accepter en entrée un objet
+`svy.Sample`/`svy.Design` déjà construit, pour les utilisateurs déjà dans cet écosystème, sans
+que `afmpi` en dépende pour fonctionner seul.
 
 ### B. Ce que l'API réelle de `mpitbR` précise, au-delà du résumé d'`agy`
 
