@@ -172,7 +172,7 @@ grappes isolées), les six méthodes de réplication, l'évolution dans le temps
 indépendants et panels/chevauchants), et l'inférence complète (VCOV, tests de Wald) :
 
 - spécification des dimensions et pondérations égales imbriquées ou personnalisées ;
-- politiques de valeurs manquantes `listwise_deletion` et `reweighting` ;
+- politiques de valeurs manquantes configurables : `listwise_deletion` (défaut), `reweighting`, `treat_as_nondeprived` et fonctions personnalisées (`"reweighting"` renormalise pour que `c_i` reste comparable et exclut l'indicateur du dénominateur de `hd`/`hdk` avec `observed=0` ; `"treat_as_nondeprived"` biaise `c_i` vers le bas et garde l'indicateur au dénominateur avec `observed=1`) ;
 - rejet explicite par défaut des valeurs manquantes dans les identifiants de sondage (`missing_design="error"`) ;
 - poids individuels ou poids ménage multipliés par la taille du ménage ;
 - scores individuels, `H`, `A`, `M0`, taux de privation censurés et non censurés, et

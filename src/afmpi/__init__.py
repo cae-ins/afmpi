@@ -3,6 +3,7 @@
 from .design_base import Design
 from .estimation import estimate
 from .hadamard import sylvester
+from .missing import MissingReport
 from .pps import PPSDesign
 from .replicate_design import ReplicateDesign
 from .results import EstimationResult
@@ -17,6 +18,7 @@ __all__ = [
     "EstimationResult",
     "HypothesisTest",
     "LonelyPSUWarning",
+    "MissingReport",
     "PPSDesign",
     "ReplicateDesign",
     "Specification",

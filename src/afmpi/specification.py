@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from math import isclose, isfinite
 from numbers import Real
 
 _WEIGHT_TOLERANCE = 1e-9
-_MISSING_POLICIES = frozenset({"listwise_deletion", "reweighting"})
+_MISSING_POLICIES = frozenset({"listwise_deletion", "reweighting", "treat_as_nondeprived"})
 
 
 class Specification:
@@ -16,6 +16,16 @@ class Specification:
     ``equal_nested`` gives every dimension the same weight, then divides each
     dimension's weight equally among its indicators. A custom mapping may be
     keyed either by every dimension or by every indicator and must sum to one.
+
+    Supported missing-value policies:
+    - ``"listwise_deletion"`` (default): drop rows with any missing indicator.
+    - ``"reweighting"``: keep rows with at least one observed indicator, reweighting
+      observed weights to sum to 1 so score ``c_i`` stays comparable. Excludes missing
+      indicators from the denominator of ``hd``/``hdk`` (observed=0).
+    - ``"treat_as_nondeprived"``: keep all rows, treating missing indicators as
+      non-deprived (g_ij=0, observed=1, weight unchanged). Biases ``c_i`` downwards
+      and keeps indicators in the denominator.
+    - Custom callable ``(frame, spec) -> pl.DataFrame``.
     """
 
     def __init__(
@@ -23,7 +33,7 @@ class Specification:
         dimensions: Mapping[str, Sequence[str]] | None = None,
         weights: str | Mapping[str, float] = "equal_nested",
         *,
-        missing_policy: str = "listwise_deletion",
+        missing_policy: str | Callable = "listwise_deletion",
     ) -> None:
         self._dimensions: dict[str, tuple[str, ...]] = {}
         self._indicator_weights: dict[str, float] = {}
@@ -116,7 +126,7 @@ class Specification:
         return dict(self._dimension_weights)
 
     @property
-    def missing_policy(self) -> str:
+    def missing_policy(self) -> str | Callable:
         return self._missing_policy
 
     def dimension_of(self, indicator: str) -> str:
@@ -175,8 +185,19 @@ class Specification:
         return parsed
 
     @staticmethod
-    def _validate_missing_policy(policy: str) -> str:
-        if policy not in _MISSING_POLICIES:
-            choices = ", ".join(sorted(_MISSING_POLICIES))
-            raise ValueError(f"missing_policy must be one of: {choices}")
-        return policy
+    def _validate_missing_policy(
+        policy: str | Callable,
+    ) -> str | Callable:
+        if isinstance(policy, str):
+            if policy not in _MISSING_POLICIES:
+                choices = ", ".join(sorted(_MISSING_POLICIES))
+                raise ValueError(
+                    f"missing_policy must be a callable or one of: {choices}; got {policy!r}"
+                )
+            return policy
+        if callable(policy):
+            return policy
+        raise TypeError(
+            f"missing_policy must be a string policy name or a callable; got {type(policy)}"
+        )
+

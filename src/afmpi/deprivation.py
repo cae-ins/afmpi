@@ -14,13 +14,20 @@ from math import isfinite
 import pandas as pd
 import polars as pl
 
+from . import missing
 from .design_base import Design
+from .missing import (
+    SCORE,
+    MissingReport,
+    contribution_column,
+    deprived_column,
+    observed_column,
+)
 from .specification import Specification
 
 InputKind = str
 
 WEIGHT = "__afmpi_n"
-SCORE = "__afmpi_c"
 STRATUM = "__afmpi_stratum"
 PSU = "__afmpi_psu"
 PI = "__afmpi_pi"
@@ -44,24 +51,6 @@ def fraction_column(level: int) -> str:
     return f"__afmpi_f{level}"
 
 
-def deprived_column(index: int) -> str:
-    """Column holding ``g_ij`` as a float, with missing values read as zero."""
-
-    return f"__afmpi_g{index}"
-
-
-def observed_column(index: int) -> str:
-    """Column holding ``1`` when indicator ``j`` is observed for the row."""
-
-    return f"__afmpi_obs{index}"
-
-
-def contribution_column(index: int) -> str:
-    """Column holding the weighted deprivation ``w_j * g_ij`` used by ``c_i``."""
-
-    return f"__afmpi_wc{index}"
-
-
 @dataclass(frozen=True, slots=True)
 class DeprivationMatrix:
     """Row-level deprivation quantities plus the columns the design needs."""
@@ -73,6 +62,7 @@ class DeprivationMatrix:
     excluded_observations: int
     population: float
     input_kind: InputKind
+    missing_report: MissingReport
 
     @property
     def indicators(self) -> tuple[str, ...]:
@@ -104,8 +94,7 @@ def build(
     frame = _validate_and_normalize_indicators(frame, indicators)
     frame = _add_population_weight(frame, design)
 
-    initial_observations = frame.height
-    frame = _apply_missing_policy(frame, spec)
+    frame, report = missing.apply(frame, spec)
     if frame.height == 0:
         raise ValueError("no observations remain after applying missing_policy")
 
@@ -117,9 +106,10 @@ def build(
         spec=spec,
         design=design,
         observations=frame.height,
-        excluded_observations=initial_observations - frame.height,
+        excluded_observations=report.dropped,
         population=population,
         input_kind=input_kind,
+        missing_report=report,
     )
 
 
@@ -160,6 +150,9 @@ def _validate_and_normalize_indicators(
         if dtype == pl.Boolean:
             normalized.append(pl.col(indicator))
             continue
+        if dtype == pl.Null:
+            normalized.append(pl.col(indicator).cast(pl.Float64))
+            continue
         if not dtype.is_numeric():
             raise TypeError(
                 f"indicator {indicator!r} must be boolean or numeric 0/1; got {dtype}"
@@ -168,7 +161,11 @@ def _validate_and_normalize_indicators(
         if dtype.is_float():
             expression = expression.fill_nan(None)
         invalid = (
-            frame.select(expression.drop_nulls().filter(~expression.is_in([0, 1])).unique())
+            frame.select(
+                expression.filter(
+                    expression.is_not_null() & ~expression.is_in([0, 1])
+                ).unique()
+            )
             .to_series()
             .to_list()
         )
@@ -210,61 +207,6 @@ def _add_population_weight(frame: pl.DataFrame, design: Design) -> pl.DataFrame:
     if total is None or not isfinite(float(total)) or total <= 0:
         raise ValueError("effective population weights must have a positive finite sum")
     return result
-
-
-def _apply_missing_policy(frame: pl.DataFrame, spec: Specification) -> pl.DataFrame:
-    """Add ``g_ij``, the observation flags, ``w_j * g_ij`` and ``c_i``.
-
-    ``listwise_deletion`` drops rows with any missing indicator. ``reweighting``
-    keeps them and redistributes the weight of the missing indicators over the
-    observed ones, so that ``c_i`` stays comparable across rows.
-    """
-
-    weights = spec.indicator_weights
-    indicators = spec.indicators
-
-    if spec.missing_policy == "listwise_deletion":
-        complete = pl.all_horizontal([pl.col(item).is_not_null() for item in indicators])
-        frame = frame.filter(complete)
-        contributions = [
-            (pl.col(item).cast(pl.Float64) * weights[item]).alias(contribution_column(index))
-            for index, item in enumerate(indicators)
-        ]
-    else:
-        observed_weight = pl.sum_horizontal(
-            [
-                pl.when(pl.col(item).is_not_null()).then(weights[item]).otherwise(0.0)
-                for item in indicators
-            ]
-        )
-        frame = frame.filter(observed_weight > 0)
-        contributions = [
-            pl.when(pl.col(item).is_not_null())
-            .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
-            .otherwise(0.0)
-            .alias(contribution_column(index))
-            for index, item in enumerate(indicators)
-        ]
-
-    if frame.height == 0:
-        return frame
-
-    frame = frame.with_columns(
-        *contributions,
-        *[
-            pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
-            for index, item in enumerate(indicators)
-        ],
-        *[
-            pl.col(item).is_not_null().cast(pl.Float64).alias(observed_column(index))
-            for index, item in enumerate(indicators)
-        ],
-    )
-    return frame.with_columns(
-        pl.sum_horizontal(
-            [pl.col(contribution_column(index)) for index in range(len(indicators))]
-        ).alias(SCORE)
-    )
 
 
 def _validate_no_missing_design_columns(frame: pl.DataFrame, design: Design) -> None:

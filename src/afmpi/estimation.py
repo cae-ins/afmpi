@@ -220,7 +220,7 @@ def _estimate_from_matrix(
         diag_rows.append({
             "topic": "missing",
             "context": "deprivation_matrix",
-            "decision": matrix.spec.missing_policy,
+            "decision": matrix.missing_report.policy,
             "detail": f"{matrix.excluded_observations} observation(s) excluded by missing-value policy",
         })
 

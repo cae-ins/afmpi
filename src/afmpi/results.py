@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import polars as pl
 
 from .deprivation import SCORE, WEIGHT, DeprivationMatrix
+from .missing import MissingReport
 
 InputKind = str
 
@@ -225,6 +226,20 @@ class EstimationResult:
             }
             return self._convert(pl.DataFrame(schema=schema))
         return self._convert(self._diagnostics.clone())
+
+    def missing_report(self) -> MissingReport:
+        """Audit report for missing-value policy application (PLAN.md §14.8)."""
+
+        report = self._matrix.missing_report
+        if self._matrix.input_kind == "pandas":
+            return MissingReport(
+                policy=report.policy,
+                rows_in=report.rows_in,
+                rows_out=report.rows_out,
+                dropped=report.dropped,
+                per_indicator=report.per_indicator.to_pandas(),
+            )
+        return report
 
     def domain(self, expression: str | pl.Expr):
         """Re-estimate on a subpopulation without breaking the design.

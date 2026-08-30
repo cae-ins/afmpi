@@ -989,8 +989,9 @@ lu §14 sous son numéro.
    des SE marginales), `resultat.test()` (Wald, différences entre groupes, différences entre
    périodes) — `degf()` déjà posé en phase 2, étendu ici aux domaines/PSU certainty/réplication
    (§6, règle documentée et testée par cas, pas un nombre calculé en silence).
-8. **Politiques de valeurs manquantes configurables** : `missing.py` — `listwise`, `reweighting`,
-   règles personnalisées (§4), au lieu de la convention unique héritée de `PythonIPM`.
+8. ✅ **Politiques de valeurs manquantes configurables** (fait, 2026-08-31, 219/219 tests) :
+   `missing.py` — `listwise`, `reweighting`, règles personnalisées (§4), au lieu de la convention
+   unique héritée de `PythonIPM`.
 9. **Performance et passage à l'échelle recensement** (§7) : E/S parquet en streaming
    (`pl.scan_parquet`, projection/predicate pushdown), pipeline en deux passages (statistiques
    suffisantes puis variables d'influence agrégées par degré — §7), agrégation hiérarchique
