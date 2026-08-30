@@ -48,17 +48,38 @@ lu seul en référence, jamais modifié depuis `afmpi`.
 
 ## 2. Objectif
 
-Concevoir puis implémenter `afmpi`, un package Python **générique** (pas spécifique à la Côte
-d'Ivoire ni à l'EHCVM) pour calculer et analyser des indices de pauvreté multidimensionnelle par
-la méthode Alkire-Foster, avec une robustesse comparable à `mpitb`/`mpitbR` : plan de sondage,
-intervalles de confiance, décomposition, robustesse à k, évolution dans le temps.
+**Ambition reformulée (utilisateur, 2026-08-30) — élévation du cahier des charges par rapport à
+la version initiale.** `afmpi` n'est plus positionné comme « un package qui calcule correctement
+Alkire-Foster », mais comme :
 
-**Ambition explicite (pas seulement la parité)** : `afmpi` doit être **meilleur** que
-`mpitb`/`mpitbR` et que tout équivalent existant, sur n'importe quelle plateforme — en
-particulier sur le passage à l'échelle (données de recensement, potentiellement des dizaines de
-millions d'individus). Voir §7 pour l'exigence de performance détaillée (backend Polars, E/S
+> **A high-performance, survey-statistically rigorous engine for Alkire-Foster multidimensional
+> poverty measurement, from complex household surveys to population-scale census data.**
+
+C'est-à-dire : un **moteur de statistique d'enquête spécialisé dans la pauvreté
+multidimensionnelle**, avec une architecture unique capable de passer d'un DHS/EHCVM classique
+(dizaines de milliers de ménages) à un recensement complet (dizaines de millions de lignes) sans
+changer de conception. La différence n'est pas cosmétique : voir §4 pour le cahier des charges
+complet, §5 pour l'architecture en pipeline statistique que cette ambition impose, §7 pour
+l'architecture de passage à l'échelle recensement.
+
+Barre de qualité cible, telle que fixée par l'utilisateur :
+
+| | Méthodologie | Scalabilité |
+|---|---|---|
+| `mpitb` (Stata) | ★★★★★ | ★★ |
+| `mpitbR` (R) | ★★★★★ | ★★★ |
+| **`afmpi` (cible)** | ★★★★★ | ★★★★★ |
+
+`afmpi` doit égaler `mpitb`/`mpitbR` sur la méthodologie (déjà l'objectif initial, §4, §8) **et**
+les dépasser nettement sur la scalabilité — c'est la seule dimension où un package Python
+Polars-natif peut avoir un avantage structurel qu'aucun des deux autres ne peut rattraper
+facilement (Stata et R n'ont pas d'équivalent direct à l'évaluation paresseuse + streaming
+columnar de Polars). Voir §7 pour l'exigence de performance détaillée (backend Polars, E/S
 parquet, benchmarks chiffrés) : ce n'est pas une optimisation optionnelle ajoutée après coup,
-c'est un critère de réussite du projet au même titre que l'exactitude numérique.
+c'est un critère de réussite du projet au même titre que l'exactitude numérique — et l'exactitude
+numérique elle-même doit désormais couvrir la variance/les erreurs-types, pas seulement les
+estimateurs ponctuels (§4, §8 — deux logiciels peuvent produire le même M0 et des erreurs-types
+différentes ; les deux doivent être justes).
 
 **Hors périmètre** (explicitement) :
 - pas de ré-écriture du pipeline `PythonIPM` existant — `afmpi` est une bibliothèque
@@ -92,12 +113,48 @@ c'est un critère de réussite du projet au même titre que l'exactitude numéri
   cae-ins` ou équivalent) avant `gh repo create cae-ins/afmpi`. Si ce changement de compte
   échoue ou si les droits manquent, `Sol` doit s'arrêter et le signaler plutôt que de forcer une
   autre méthode de publication.
-- **Séquencement** : publier une coquille vide n'aurait pas de sens — le dépôt `cae-ins/afmpi`
-  n'est créé qu'après que le socle (§9, phase 1 au minimum) est implémenté, testé, et validé
-  contre `PythonIPM` (§8). La publication PyPI, elle, reste un jalon ultérieur distinct, sur
-  nouvelle confirmation explicite de l'utilisateur (pas incluse dans l'autorisation ci-dessus).
+- **Séquencement** : le dépôt `cae-ins/afmpi` a été créé après la phase 0 (§9), déjà fait. Les
+  phases 1-12 (§9) republieront sur ce même dépôt (nouveaux commits/tags), pas un nouveau dépôt.
+  La publication PyPI reste un jalon distinct, sur nouvelle confirmation explicite de
+  l'utilisateur à chaque fois (pas un blanc-seing permanent — voir §9, phase 12).
 
-## 4. Ce que le package doit reproduire (checklist de parité fonctionnelle)
+## 4. Cahier des charges complet
+
+**Cahier des charges élevé par l'utilisateur (2026-08-30)** : ne pas se contenter de « H, A, M0
+plus un plan de sondage simple » — couvrir *tout* ce qu'un plan d'enquête complexe peut exiger.
+C'est le tableau de référence pour juger si une fonctionnalité manque, à consulter avant de
+déclarer une phase terminée (§9).
+
+| Domaine | Ce que `afmpi` (cible finale) doit couvrir |
+|---|---|
+| Estimateurs AF | H, A, M0, Hⱼ, CHⱼ, contributions absolues/relatives, par dimension, scores censurés |
+| Seuils | un k, grille de k (robustesse), dominance/robustesse aux seuils |
+| Pondérations | poids simples, poids ménage × taille, poids individuels, poids calibrés externes |
+| Stratification | strates simples et imbriquées |
+| Grappes | PSU, SSU, multi-degrés |
+| FPC | correction de population finie par degré |
+| PPS | designs à probabilités inégales / PPS |
+| PSU isolé | `fail`, `certainty`, `adjust`, `average`, `collapse` — selon options explicites |
+| Estimation par domaine | sous-populations sans casser le design (§6) |
+| Ratios | variance correcte de A, des contributions et autres ratios, via linéarisation (§5) |
+| Covariances | matrice variance-covariance complète (VCOV), pas seulement des erreurs-types isolées |
+| Réplicats | JK1/JKn, BRR, Fay BRR, bootstrap d'enquête |
+| IC | normal, t, logit, transformations adaptées aux bornes |
+| Tests | Wald, différences entre groupes, différences entre périodes |
+| Temps | échantillons indépendants et panels/échantillons chevauchants |
+| Décomposition | groupes, régions, sexe, milieu, dimensions, indicateurs |
+| Valeurs manquantes | listwise, reweighting, règles configurables |
+| Big data | Polars `LazyFrame`, Parquet, Arrow, streaming/out-of-core |
+| Recensement | mode recensement sans coût artificiel d'inférence (§7 — `CensusDesign`) |
+| Reproductibilité | résultats déterministes + provenance de la spécification |
+| Validation | comparaison automatique avec `mpitb`, `mpitbR` et `survey` (R) — §8 |
+
+**Ce que ce tableau change par rapport à la version précédente du plan** (déjà partiellement
+couvert, à consolider) : PPS, PSU isolé à *options multiples* (pas qu'un seul comportement par
+défaut), FPC *par degré* (pas un simple booléen), VCOV *complète* (pas juste des SE marginales),
+réplicats *au pluriel* (JK1/JKn/BRR/Fay BRR/bootstrap — au-delà du bootstrap/jackknife déjà notés
+en §12), tests d'hypothèses (Wald, comparaisons de groupes/périodes) — absents de toute version
+antérieure du plan, et la distinction explicite recensement ≠ échantillon (§7).
 
 Repris de la documentation `mpitb`/`mpitbR` (voir `PythonIPM/METHODOLOGIE.md`, section OPHI, pour
 les sources) :
@@ -152,7 +209,67 @@ l'erreur-type, mais avec un bornage différent aux extrêmes. **`afmpi` doit imp
 méthodes de bornage** (logit et troncature), documenter la différence, et permettre de choisir —
 c'est un des axes où ce package peut dépasser `PythonIPM` en rigueur.
 
-## 5. Architecture proposée
+## 5. Architecture — le moteur en pipeline statistique, pas une fonction par estimateur
+
+**Principe directeur (utilisateur, 2026-08-30), à ne pas violer** : la variance ne doit surtout
+pas être ajoutée comme un appendice. H et M0 sont essentiellement des moyennes pondérées, mais
+**A est un ratio** :
+
+```
+A = Σᵢ wᵢ·cᵢ(k) / Σᵢ wᵢ·1(cᵢ≥k)
+```
+
+et les contributions relatives (pctbⱼ) sont aussi des ratios. Un moteur statistiquement sérieux
+doit donc savoir produire les **fonctions d'influence / variables linéarisées** de chaque
+estimand AVANT d'appliquer le design d'enquête — pas calculer H, A, M0 puis leur coller chacun
+une `variance_H()`, `variance_A()`, `variance_M0()` séparée et non composable. C'est beaucoup
+plus robuste, et c'est ce que fait `survey` (R) et `svy` (Python) en interne (§12).
+
+Pipeline conceptuel (chaque étage ne connaît que la sortie de l'étage précédent — testable
+isolément, voir §8) :
+
+```
+                       Specification AF
+                             │
+                             ▼
+                    Deprivation Engine
+                             │
+                    g_ij, c_i, poor_i
+                             │
+                             ▼
+                    Estimand Compiler
+                ┌────────────┼────────────┐
+                H            A            M0
+                │            │             │
+                └──── contributions ──────┘
+                             │
+                             ▼
+                    Linearized Variables
+                             │
+                             ▼
+                      Survey Engine
+       ┌─────────┬──────────┬──────────┬───────────┐
+       weights   strata     PSU/SSU    FPC/PPS
+       └─────────┴──────────┴──────────┴───────────┘
+                             │
+                             ▼
+                 VCV / SE / CI / Tests
+```
+
+- **Deprivation Engine** : applique le vecteur z aux indicateurs bruts → `g_ij` (matrice de
+  privation 0/1), `c_i` (score pondéré), `poor_i` (statut de pauvreté au seuil k). Ne connaît
+  rien du plan de sondage.
+- **Estimand Compiler** : combine `g_ij`/`c_i`/`poor_i` en H, A, M0 et contributions — au niveau
+  *ponctuel*, toujours sans plan de sondage. C'est ici que vivent les formules du §4.
+- **Linearized Variables** : pour chaque estimand qui est un ratio (A, pctbⱼ, et tout ratio de
+  sous-groupe), calcule la variable linéarisée (fonction d'influence) qui remplace ce ratio par
+  une quantité *additive* par observation — c'est cette transformation qui rend la variance
+  correcte, composable, et réutilisable pour n'importe quel design (Taylor ou réplication) sans
+  code dupliqué.
+- **Survey Engine** : applique poids/strates/PSU/SSU/FPC/PPS aux variables linéarisées pour
+  produire VCOV/SE/IC/tests — ce module ne sait rien d'Alkire-Foster, il consomme des variables
+  linéarisées génériques (potentiellement réutilisable pour d'autres estimands hors MPI un jour,
+  bien que ce ne soit pas un objectif du projet — voir §2, hors périmètre).
 
 ```
 afmpi/
@@ -160,42 +277,95 @@ afmpi/
 ├── README.md
 ├── PLAN.md                    (ce document)
 ├── src/afmpi/
-│   ├── __init__.py             exporte l'API publique
+│   ├── __init__.py              exporte l'API publique
 │   ├── backend.py               ingestion pandas -> Polars via Arrow (§7 ; pas de narwhals)
 │   ├── io.py                    lecture/écriture parquet (streaming), .dta en export seulement
-│   ├── specification.py        Specification : dimensions, indicateurs, poids
-│   ├── survey_design.py        SurveyDesign : poids, psu, strates
-│   ├── estimation.py           estimate() -> EstimationResult ; censure, H/A/M0, hd/hdk
-│   │                            (calcul Polars natif, lazy par défaut — voir §7)
-│   ├── contributions.py        actb, pctb, décomposition par dimension
-│   ├── decomposition.py        désagrégation par sous-groupe (`over`), vérif décomposabilité
-│   ├── robustness.py           robustesse à k (klist), éventuellement à d'autres choix
-│   ├── variance.py             méthodes d'IC : ultimate cluster tronqué, logit svyciprop en
-│   │                            phase 1-3 ; réplication (bootstrap/BRR/jackknife façon `svy`,
-│   │                            §12) envisagée plus tard, pas un jalon actuel
-│   ├── change_over_time.py     paramètres tvar/cot_year de estimate() (§6, §12) : deltas
-│   │                            absolus/relatifs/annualisés — fonctions internes, pas une API
-│   │                            séparée pour l'utilisateur
-│   └── results.py              EstimationResult : coef(), confint(), summary(), to_frame()
+│   ├── specification.py         Specification : dimensions, indicateurs, poids AF (§4)
+│   │
+│   │   --- Deprivation Engine + Estimand Compiler ---
+│   ├── deprivation.py            g_ij, c_i, poor_i — vecteur z appliqué, sans plan de sondage
+│   ├── estimands.py              H, A, M0, Hⱼ, CHⱼ, actbⱼ, pctbⱼ ponctuels (formules §4)
+│   │
+│   │   --- Linearized Variables (le cœur de la robustesse, §5) ---
+│   ├── linearization.py          fonctions d'influence pour A, pctbⱼ et tout ratio de
+│   │                             sous-groupe — étage central, testé indépendamment (§8)
+│   │
+│   │   --- Survey Engine : deux familles de plans (§6) ---
+│   ├── survey_design.py          SurveyDesign (Taylor) : weights, strata (imbriquées), psu,
+│   │                             ssu, fpc (par degré), pps, lonely_psu=
+│   ├── replicate_design.py       ReplicateDesign : weights, replicate_weights, method=
+│   │                             (JK1/JKn/BRR/Fay BRR/bootstrap), fay=
+│   ├── census_design.py          CensusDesign : SE=0 pour l'erreur d'échantillonnage (§7)
+│   ├── domain.py                 estimation par domaine sans casser le design (§6) — zéro-
+│   │                             pondération, pas un filtre naïf avant estimation
+│   ├── variance.py               VCOV/SE/CI/tests à partir des variables linéarisées +
+│   │                             n'importe laquelle des 3 familles de design ci-dessus ;
+│   │                             IC normal/t/logit ; tests de Wald, différences de groupes
+│   │
+│   │   --- Composition et résultats ---
+│   ├── contributions.py          actb, pctb, décomposition par dimension
+│   ├── decomposition.py          désagrégation par sous-groupe (`over`), vérif décomposabilité,
+│   │                             invariants Σφˡ·M0ˡ = M0 (§8)
+│   ├── robustness.py             robustesse à k (klist)
+│   ├── change_over_time.py       paramètres tvar/cot_year de estimate() (§6, §12) — échantillons
+│   │                             indépendants et panels/chevauchants (§4)
+│   ├── missing.py                politiques de valeurs manquantes : listwise, reweighting,
+│   │                             règles configurables (§4)
+│   └── results.py                EstimationResult : coef(), confint(), summary(), to_frame(),
+│                                  vcov() (matrice complète), provenance de la spécification (§4)
 ├── tests/
-│   ├── test_estimation.py      cas construits à la main (répliquer les auto-contrôles de
-│   │                            PythonIPM/pipeline/*.py --check, mêmes valeurs attendues)
-│   ├── test_against_mpitb.py   comparaison numérique aux exemples officiels mpitb (voir §8)
-│   ├── test_against_pythonipm.py  comparaison aux résultats réels EHCVM 2021 de PythonIPM
-│   │                            (H=62,5 %, A=0,502, M0=0,314 avec NEET 16-35 — à figer une
-│   │                            fois PythonIPM stabilisé, en tolérance stricte 1e-6)
-│   ├── test_performance_scale.py  benchmarks §7 : jeu synthétique à l'échelle recensement,
-│   │                            cibles de temps/mémoire, comparaison au backend pandas naïf
-│   └── data/                   petits jeux de données synthétiques, pas de données EHCVM réelles
+│   ├── test_estimation.py        cas construits à la main (répliquer les auto-contrôles de
+│   │                              PythonIPM/pipeline/*.py --check, mêmes valeurs attendues)
+│   ├── test_linearization.py     variables linéarisées vérifiées indépendamment (§5, §8)
+│   ├── test_conformity/          suite de conformité statistique multi-design (§8) — un fichier
+│   │                              par famille de design (SRS, stratifié, grappe, deux degrés,
+│   │                              PPS, FPC, PSU isolé, domaines, k=0/k=1, poids extrêmes,
+│   │                              valeurs manquantes, réplicats)
+│   ├── test_invariants.py        invariants mathématiques indépendants des logiciels (§8),
+│   │                              tourne en CI à chaque commit
+│   ├── test_against_mpitb.py     comparaison numérique aux exemples officiels mpitb (§8)
+│   ├── test_against_survey_r.py  comparaison H/A/M0 ET VCOV contre le package survey (R) (§8)
+│   ├── test_against_pythonipm.py comparaison aux résultats réels EHCVM 2021 de PythonIPM
+│   │                              (H=62,5 %, A=0,502, M0=0,314 avec NEET 16-35 — à figer une
+│   │                              fois PythonIPM stabilisé, en tolérance stricte 1e-6)
+│   ├── test_performance_scale.py benchmarks §7 : jeu synthétique à l'échelle recensement,
+│   │                              cibles de temps/mémoire, comparaison au backend pandas naïf
+│   └── data/                     petits jeux de données synthétiques, pas de données EHCVM réelles
 └── docs/
     └── quickstart.md
 ```
 
-## 6. Esquisse de l'API publique
+## 6. Trois familles de plans d'enquête, domaines, et l'API publique
+
+**Principe (utilisateur, 2026-08-30)** : la méthode *ultimate cluster* seule ne suffit pas à
+prétendre gérer « tout plan complexe ». `afmpi` doit offrir **trois familles d'inférence**,
+partageant le même étage de variables linéarisées (§5) mais consommées différemment :
 
 ```python
-import afmpi
-import pandas as pd
+# 1. Taylor / linéarisation — plans avec structure explicite (le cas général)
+design = afmpi.SurveyDesign(
+    weights="hh_weight",
+    strata="stratum_id",            # simples ou imbriquées (liste de colonnes)
+    psu="cluster_id",
+    ssu="sub_cluster_id",           # deuxième degré, optionnel
+    fpc=["fpc_stage1", "fpc_stage2"],  # correction de population finie, PAR DEGRÉ
+    pps=False,                      # probabilités inégales / PPS
+    lonely_psu="adjust",            # "fail" | "certainty" | "adjust" | "average" | "collapse" —
+                                     # PAS un seul comportement implicite (§4, §8)
+)
+
+# 2. Réplication — designs internationaux qui fournissent déjà les poids de réplicat
+#    (DHS, beaucoup d'enquêtes internationales) : évite de reconstruire un plan à partir
+#    de rien quand l'organisme les livre directement.
+design = afmpi.ReplicateDesign(
+    weights="hh_weight",
+    replicate_weights=[f"repwgt_{i}" for i in range(1, 81)],
+    method="BRR",                   # "JK1" | "JKn" | "BRR" | "Fay_BRR" | "bootstrap"
+    fay=0.5,                        # coefficient de Fay, si method="Fay_BRR"
+)
+
+# 3. Recensement — pas un échantillon : SE_échantillonnage = 0, voir §7
+design = afmpi.CensusDesign()
 
 spec = afmpi.Specification()
 spec.set(
@@ -207,28 +377,29 @@ spec.set(
     weights="equal_nested",   # ou un dict explicite {dimension: poids, ...}
 )
 
-design = afmpi.SurveyDesign(weights="hh_weight", psu="cluster_id", strata="stratum_id")
-
 resultat = afmpi.estimate(
     df=df,                     # pandas.DataFrame OU polars.DataFrame/LazyFrame — indicateurs
                                 # 0/1 (g0) + colonnes techniques (voir §7, compatibilité d'entrée)
     spec=spec,
-    design=design,
+    design=design,             # SurveyDesign, ReplicateDesign ou CensusDesign — interchangeables
     k=[0.20, 1/3, 0.50],       # plusieurs seuils -> tableau de robustesse automatique (fractions
                                 # 0-1, pas des pourcentages — voir §12, écart assumé vs mpitb/mpitbR)
     over=["region", "milieu"], # désagrégations, autant que voulu — un seul appel, comme
-                                # mpitb.est(..., over=c("area","region")) (§12)
-    ci_method="logit",         # "logit" (défaut) ou "ultimate_cluster" ; voir §12 pour un futur
-                                # "replicate" (bootstrap/BRR/jackknife), pas en phase 1-3
+                                # mpitb.est(..., over=c("area","region")) (§12) ; PRÉSERVE le
+                                # design complet pour chaque sous-groupe (voir domaines, ci-dessous)
+    ci_method="logit",         # "normal" | "t" | "logit" (défaut) — bornes adaptées §4
     tvar=None, cot_year=None,  # comparaison dans le temps intégrée à estimate() plutôt qu'une
                                 # fonction séparée — reprend le patron mpitb.est(tvar=, cotyear=)
                                 # (§12), simplifie l'API par rapport à un compare_over_time() à part
+    missing="listwise",        # ou "reweighting" — politique explicite, pas implicite (§4)
     backend="polars",          # défaut ; "pandas" en repli (plus lent, documenté comme tel)
     lazy=False,                # True -> renvoie un plan de calcul non exécuté, .collect() pour lancer
 )
 
 resultat.coef()                # H, A, M0 ponctuels, par k et par sous-groupe
 resultat.confint()             # IC
+resultat.vcov()                # matrice variance-covariance complète (H, A, M0, contributions...)
+resultat.test(a="region=='Abidjan'", b="region=='Bounkani'")  # Wald, différence entre groupes
 resultat.contributions()       # hd, hdk, actb, pctb par indicateur
 resultat.summary()             # tableau formaté, façon mpitb
 resultat.to_frame()            # DataFrame plat, colonnes minimales et nommées sobrement
@@ -241,9 +412,39 @@ lazy_result = afmpi.from_parquet("recensement_2026.parquet", streaming=True) \
 resultat = lazy_result.collect()
 ```
 
+### Une vraie notion de domaine — pas un filtre avant estimation
+
+**Erreur statistique classique à éviter explicitement (utilisateur, 2026-08-30)** : pour l'IPM
+d'une seule région, il est **faux** de faire
+
+```python
+df_abidjan = df.filter(pl.col("region") == "Abidjan")
+afmpi.estimate(df_abidjan, spec, design, ...)   # FAUX : modifie le design
+```
+
+Filtrer les lignes avant d'estimer **change le plan de sondage** (nombre de PSU/strates observés
+dans la variance change), donc fausse potentiellement l'erreur-type — même si l'estimateur
+ponctuel a l'air correct. C'est ce genre de détail qui sépare un package statistiquement sérieux
+d'un package qui donne seulement les bons estimateurs ponctuels.
+
+`afmpi` doit implémenter l'estimation par domaine correctement : soit via `over=` (qui préserve
+le design complet pour chaque sous-groupe, cas le plus courant), soit via une méthode dédiée :
+
+```python
+resultat.domain("region == 'Abidjan'")   # zéro-pondère les lignes hors domaine plutôt que de
+                                          # les retirer — le design (PSU, strates) reste intact,
+                                          # la variance reste correcte
+```
+
+Mécanique interne : le module `domain.py` (§5) applique une indicatrice de domaine en amont de
+l'étage de linéarisation (poids nul hors domaine, mais la ligne existe toujours pour le calcul
+des strates/PSU), exactement le mécanisme de `subset()` dans `survey` (R) — jamais un `.filter()`
+brut avant `estimate()`.
+
 Point de design encore ouvert :
-- API orientée objets (`Specification`, `SurveyDesign`, `EstimationResult`) vs fonctionnelle pure
-  (fonctions + dataclasses immuables) — privilégier ce qui teste le plus facilement.
+- API orientée objets (`Specification`, `SurveyDesign`/`ReplicateDesign`/`CensusDesign`,
+  `EstimationResult`) vs fonctionnelle pure (fonctions + dataclasses immuables) — privilégier ce
+  qui teste le plus facilement.
 
 **Revu et affiné en profondeur (Claude, 2026-08-30, voir §12)** : `estimate()` fusionne
 désormais ce qui aurait été un `compare_over_time()` séparé (paramètres `tvar`/`cot_year`,
@@ -255,7 +456,10 @@ native en Polars de la variance de plan de sondage (linéarisation par grappe, m
 cluster*) — `samplics` impose une structure pandas, alourdit le graphe de dépendances, et bride
 le multi-threading de Polars. La linéarisation par grappe s'écrit en moins de 150 lignes
 d'expressions Polars (`pl.Expr`) à haute performance ; `PythonIPM/pipeline/05_indices_ipm.py`
-(fonction `ratio_et_ic`) en donne déjà la version pandas de référence à porter.
+(fonction `ratio_et_ic`) en donne déjà la version pandas de référence à porter — **mais cette
+implémentation ne couvre qu'une fraction du cahier des charges du §4** (ultimate cluster seul,
+pas de PPS/FPC par degré/PSU isolé à choix multiple/réplication) : elle reste le point de départ
+du module `variance.py`, pas sa version finale.
 
 ## 7. Performance et passage à l'échelle (recensement)
 
@@ -304,6 +508,53 @@ moteur de calcul.
   agrégations directes sans étape intermédiaire matérialisée) plutôt que des colonnes dupliquées
   systématiques, sauf quand la colonne est réellement réutilisée plusieurs fois.
 
+### Le pipeline recensement : ne matérialiser que ce qui est nécessaire
+
+**Architecture cible pour un fichier recensement de 100 Go** (utilisateur, 2026-08-30) :
+
+```
+100 GB Parquet
+      │
+      ▼  projection pushdown (17 indicateurs + poids + taille ménage + PSU + strate
+      │  + variables `over` — pas les ~400 variables d'un recensement complet)
+      ▼  predicate pushdown (filtres appliqués avant lecture, pas après)
+      ▼  calcul g_ij / c_i en streaming (Deprivation Engine + Estimand Compiler, §5,
+      │  jamais toute la table en mémoire à la fois)
+      ▼  agrégations par PSU × strate × groupe (§5, Linearized Variables agrégées)
+      ▼
+ petite table agrégée (dizaines de milliers de lignes, pas des millions)
+      │
+      ▼
+ variance et résultats finaux (Survey Engine, §5)
+```
+
+**L'idée clé, à ne pas manquer** : pour la variance par linéarisation, une fois les variables
+linéarisées calculées ligne par ligne, la partie statistiquement lourde (le Survey Engine, §5)
+**n'a pas besoin de rester au niveau des dizaines de millions de lignes** — les sommes par PSU
+(pour l'estimateur *ultimate cluster*, comme pour Taylor en général) peuvent être agrégées une
+fois, tôt dans le pipeline. Concrètement : 30 000 000 personnes → ~10 000 PSU pour les calculs
+finaux de variance. C'est le levier de performance le plus important de toute l'architecture —
+`pl.scan_parquet(...).select(colonnes_utiles).group_by(["psu", "strate", *over]).agg(...)`
+avant même d'atteindre l'étage de variance, plutôt que de faire tourner le calcul de variance
+sur la table complète.
+
+### Recensement complet ≠ grand échantillon — `CensusDesign`
+
+Distinction statistique à ne pas mélanger : si les N lignes constituent la **population
+exhaustive** (recensement réel, pas un très gros échantillon), il n'y a **pas d'erreur
+d'échantillonnage** à estimer.
+
+```python
+design = afmpi.CensusDesign()
+```
+
+Dans ce cas, `SE_échantillonnage = 0` — d'autres incertitudes peuvent exister (non-réponse,
+erreur de mesure, imputation) mais ce n'est plus la variance de sondage classique du Survey
+Engine, et `afmpi` ne doit pas prétendre en produire une. `CensusDesign` doit donc **éviter
+totalement** les calculs par PSU/strate (ils n'ont pas de sens sans échantillonnage), ce qui le
+rend encore plus rapide que `SurveyDesign` sur les mêmes données — un mode dédié, pas
+`SurveyDesign` avec un design dégénéré à un seul PSU géant.
+
 ### Suite de benchmarks — obligatoire, pas optionnelle
 
 1. **Jeu de données synthétique à l'échelle recensement** : généré aléatoirement (pas de vraies
@@ -334,19 +585,77 @@ Pas seulement « c'est rapide en interne » — donner des leviers explicites da
   plusieurs analyses (k différents, sous-groupes différents) sans relire/reconvertir les données
   à chaque appel.
 
-## 8. Stratégie de validation
+## 8. Stratégie de validation — suite de conformité statistique
 
-Un package qui prétend la robustesse de `mpitb`/`mpitbR` doit être **vérifié contre eux**, pas
-seulement testé unitairement :
+**Principe élevé (utilisateur, 2026-08-30)** : « nos résultats EHCVM sont identiques à
+`PythonIPM` » n'est **plus suffisant** pour l'ambition du §2. Deux logiciels peuvent produire
+exactement le même M0 et des erreurs-types différentes — la validation doit donc couvrir
+**H, A, M0** *et* **VCOV(H, A, M0, contributions, ...)**, pas seulement les estimateurs
+ponctuels. C'est le changement de posture le plus important de cette section.
+
+### A. Suite de conformité multi-design, contre plusieurs références
+
+Pour chaque **design de test** ci-dessous, générer un jeu de données synthétique qui l'exhibe,
+calculer les mêmes quantités dans `afmpi` et dans chacune des références disponibles, et publier
+les écarts :
+
+```
+ΔH  = H_afmpi  − H_référence
+ΔSE = SE_afmpi − SE_référence
+```
+
+(et l'équivalent pour A, M0, contributions).
+
+**Références croisées** : Stata `mpitb`, Stata `svy:` (commandes natives de plan de sondage
+Stata — pas le package Python `svy` de §12, à ne pas confondre), R `mpitbR`, R `survey`. `afmpi`
+doit converger avec ces quatre à une tolérance documentée (pas nécessairement 1e-6 partout — la
+tolérance dépend du design testé et doit être justifiée, pas arbitraire).
+
+**Designs à tester** (table `tests/test_conformity/`, §5) :
+
+| Catégorie | Cas |
+|---|---|
+| Structure de base | SRS, stratifié SRS, un degré en grappes, stratifié en grappes, deux degrés |
+| Pondération/échantillonnage | probabilités inégales (PPS), FPC |
+| Cas limites de design | PSU isolé (un seul par strate), très petits domaines |
+| Domaines | sous-population par `over=`/`domain()`, y compris domaines qui traversent les strates |
+| Cas limites AF | zéro pauvre, tout le monde pauvre, k = 0, k = 1 |
+| Données | poids extrêmes, valeurs manquantes (selon chaque politique du §4) |
+| Réplication | poids de réplicat fournis en entrée (JK1/JKn/BRR/Fay BRR/bootstrap) |
+
+### B. Tests mathématiques indépendants des logiciels — en CI à chaque commit
+
+Au-delà de la comparaison à des références externes (qui peuvent elles-mêmes différer), des
+**invariants mathématiques** vrais par construction, à vérifier automatiquement, sans dépendre
+d'aucune référence externe :
+
+```
+M0 = H × A
+Σⱼ actbⱼ = M0
+Σⱼ pctbⱼ = 1
+```
+
+et pour des sous-groupes exhaustifs (décomposabilité) :
+
+```
+M0 = Σ_g (N_g / N) · M0,g
+```
+
+à une précision numérique donnée (documentée, pas laissée implicite). **Ces tests doivent
+tourner en CI à chaque commit** (`test_invariants.py`, §5) — pas seulement à la validation finale
+d'une phase : ce sont les tests les moins coûteux à faire tourner et les plus rapides à alerter
+si une régression casse la cohérence interne du calcul.
+
+### C. Ce qui existait déjà, toujours valable
 
 1. **Jeux de données de référence OPHI** : `mpitb` est distribué avec des exemples (souvent basés
    sur des extraits DHS publics). Les récupérer (documentation `mpitb`/`mpitbR` sur CRAN/SSC),
    les rejouer dans `afmpi`, comparer H/A/M0/contributions aux valeurs publiées par `mpitb` à
-   6 décimales.
-2. **PythonIPM comme second cas réel** : une fois `PythonIPM` stabilisé (SU3/NEET/zone inclus),
-   ses résultats EHCVM 2021 (`PythonIPM/sorties/csv/indices_ipm_ci.csv`) servent de référence
-   indépendante — deux implémentations distinctes (l'une à la main, l'autre via `afmpi`) doivent
-   converger à 1e-6 près sur les mêmes données d'entrée.
+   6 décimales — désormais complété par la comparaison de VCOV du point A ci-dessus.
+2. **PythonIPM comme cas réel** (pas suffisant seul, voir principe ci-dessus, mais toujours un
+   cas de test précieux) : une fois `PythonIPM` stabilisé (SU3/NEET/zone inclus), ses résultats
+   EHCVM 2021 (`PythonIPM/sorties/csv/indices_ipm_ci.csv`) servent de référence indépendante —
+   deux implémentations distinctes doivent converger à 1e-6 près sur les mêmes données d'entrée.
 3. **Auto-contrôles portés** : les jeux de données synthétiques des `--check` de
    `PythonIPM/pipeline/{01,02,03,04,05}_*.py` (ménages aux résultats calculables à la main) sont
    déjà écrits et documentés — les reprendre comme premiers tests unitaires d'`afmpi` fait gagner
@@ -371,39 +680,61 @@ seulement testé unitairement :
 
 ## 9. Phasage proposé
 
-1. **Socle** — périmètre précisé en revue (`agy`, 2026-08-30, voir §10) :
-   - Modules : `specification.py`, `survey_design.py` (poids individuels/ménages uniquement, PAS
-     encore grappes/strates — phase 2), `estimation.py` (cᵢ, cᵢ(k), H, A, M0, Hⱼ, CHⱼ, actbⱼ,
-     pctbⱼ, en Polars in-memory, pour un seul k), `results.py` (`summary()`, `to_frame()`).
-   - Entrées acceptées : `pandas.DataFrame` (converti via Arrow) ou `polars.DataFrame` — **Polars
-     dès cette phase** (pas ajouté après coup : la logique de calcul doit être écrite
-     polars-natif dès le départ, pas migrée plus tard), mais sans E/S parquet avancée ni mode
-     streaming (ça, c'est la phase 4).
-   - Tests : portage direct des jeux de données synthétiques d'auto-contrôle de
-     `PythonIPM/pipeline/{01,02,05}_*.py --check` (résultats calculables à la main).
-2. **Plan de sondage complet** : grappes/strates, les deux méthodes d'IC, tests contre un exemple
-   `mpitb` officiel.
-3. **Désagrégation et robustesse** : `over=[...]`, décomposabilité vérifiée par assertion,
-   `klist` (robustesse à k).
-4. **Performance et passage à l'échelle** (§7) : E/S parquet, mode streaming/lazy, jeu de données
-   synthétique à l'échelle recensement, suite de benchmarks avec cibles chiffrées, comparaison
-   mesurée à un équivalent pandas naïf.
-5. **Évolution dans le temps** : paramètres `tvar=`/`cot_year=` de `estimate()` (§6, §12 —
-   plus de fonction `compare_over_time()` séparée), deltas absolus/relatifs/annualisés.
-6. **Rigueur de variance à égaler avec les meilleurs outils du domaine** (§12) : méthodes de variance par
-   réplication (bootstrap, jackknife au minimum), en citant `svy` comme référence de correction
-   des erreurs-types. Phase ajoutée suite à l'analyse comparative du §12 — ordre exact (avant ou
-   après la phase 4 performance) à trancher par `agy`.
-7. **Validation croisée finale** : comparaison chiffrée à `PythonIPM` sur l'EHCVM 2021 complet,
-   rapport de conformité.
-8. **Packaging** : `pyproject.toml`, README (avec la note sur les seuils k en fractions vs
-   pourcentages, §12.B.4), docs, CI (tests + lint).
-9. **Publication GitHub** : `git init`, commit initial, `gh repo create cae-ins/afmpi --public
-   --source=. --push` (ou équivalent) — voir la contrainte de compte actif au §3. Pas de
-   publication PyPI à ce stade : jalon distinct, sur nouvelle confirmation de l'utilisateur.
+**Révisé (2026-08-30) suite à l'élévation du cahier des charges (§2, §4)** — le phasage initial
+(6 phases) sous-dimensionnait largement ce qu'implique « moteur de statistique d'enquête », pas
+seulement « calculateur Alkire-Foster ». Nouveau découpage, aligné sur l'architecture en pipeline
+du §5 (chaque phase ajoute un étage ou enrichit un étage existant, jamais les deux à la fois) :
 
-*(Note : les phases 1, 8 et 9 sont déjà faites au 2026-08-30 — package de base publié sur
-`github.com/cae-ins/afmpi`, tag `v0.1.0`. Les phases 2 à 7 restent à faire.)*
+0. ✅ **Socle** (fait, 2026-08-30, tag `v0.1.0`) : `Specification`, `SurveyDesign` minimal (poids
+   simples uniquement), `estimate()` en Polars in-memory pour un seul k sans plan de sondage,
+   `EstimationResult` (`coef()`, `to_frame()`). 16/16 tests. Publié sur `cae-ins/afmpi`.
+1. **Linéarisation** (§5, l'étage le plus important architecturalement) : `linearization.py` —
+   fonctions d'influence pour A et pctbⱼ, testées indépendamment de tout plan de sondage
+   (`test_linearization.py`). Sans cet étage, tout ce qui suit reproduirait le défaut du plan
+   initial (une fonction de variance par estimand, non composable).
+2. **`SurveyDesign` de base** : poids + strates simples + PSU (un degré), méthodes d'IC normal/t/
+   logit consommant les variables linéarisées de la phase 1. Tests contre un exemple `mpitb`
+   officiel et contre `survey` (R) sur un design SRS/stratifié simple.
+3. **Domaines et désagrégation** : `domain.py` (estimation par sous-population sans casser le
+   design — §6), `over=[...]`, décomposabilité vérifiée par assertion (`Σφˡ·M0ˡ = M0`), `klist`
+   (robustesse à k). Tests : domaines qui traversent les strates, très petits domaines.
+4. **`SurveyDesign` complet** : strates imbriquées, SSU (deuxième degré), FPC par degré, PPS,
+   PSU isolé à options multiples (`fail`/`certainty`/`adjust`/`average`/`collapse`, §4). Chaque
+   option de PSU isolé testée séparément, pas seulement le comportement par défaut.
+5. **`ReplicateDesign`** : JK1/JKn/BRR/Fay BRR/bootstrap d'enquête — pour les fichiers
+   internationaux qui fournissent déjà des poids de réplicat. Rigueur de validation à égaler
+   avec `svy` (§12) : comparer contre `survey` (R) à haute précision, documenter tout écart
+   chiffré dans un `CHANGELOG.md`.
+6. **Évolution dans le temps** : paramètres `tvar=`/`cot_year=` de `estimate()` (§6, §12),
+   échantillons indépendants et panels/échantillons chevauchants (§4), deltas
+   absolus/relatifs/annualisés.
+7. **Tests d'hypothèses et VCOV complète** : `resultat.vcov()` (matrice complète, pas seulement
+   des SE marginales), `resultat.test()` (Wald, différences entre groupes, différences entre
+   périodes).
+8. **Politiques de valeurs manquantes configurables** : `missing.py` — `listwise`, `reweighting`,
+   règles personnalisées (§4), au lieu de la convention unique héritée de `PythonIPM`.
+9. **Performance et passage à l'échelle recensement** (§7) : E/S parquet en streaming
+   (`pl.scan_parquet`, projection/predicate pushdown), agrégation précoce par PSU × strate ×
+   groupe, `CensusDesign` (SE d'échantillonnage nulle), jeu de données synthétique à l'échelle
+   recensement, suite de benchmarks avec cibles chiffrées, comparaison mesurée à un backend
+   pandas naïf. Volontairement après la rigueur statistique (phases 1-8) : optimiser un calcul
+   encore faux n'a pas de sens.
+10. **Suite de conformité statistique complète** (§8) : tous les designs de test du tableau §8.A,
+    comparaison à quatre références (`mpitb`, `svy:` Stata, `mpitbR`, `survey` R) sur H/A/M0 *et*
+    VCOV, invariants mathématiques en CI à chaque commit (déjà introduits dès la phase 1 pour les
+    invariants de base, complétés ici pour la décomposabilité multi-niveaux).
+11. **Packaging et documentation à jour** : README réécrit pour refléter l'API finale (familles
+    de design, domaines, note sur les seuils k en fractions vs pourcentages §12.B.4), docs,
+    `CHANGELOG.md`, CI complète (tests + lint + benchmarks de non-régression).
+12. **Republication GitHub** : nouveau tag (`v0.2.0` ou au jugé selon l'ampleur des phases 1-11),
+    `cae-ins/afmpi` déjà créé (phase 0) — pas de nouvelle création de dépôt, juste une mise à
+    jour. Publication PyPI : jalon distinct, sur nouvelle confirmation explicite de
+    l'utilisateur à chaque fois (pas un blanc-seing permanent).
+
+*(Note : seule la phase 0 est faite au 2026-08-30. Les phases 1 à 12 restent à faire — c'est un
+programme de travail substantiel, pas une correction ponctuelle. `agy` doit évaluer si ce
+découpage en 13 phases (0-12) est le bon grain pour des passes `Sol` successives, ou s'il faut
+regrouper certaines phases.)*
 
 ## 10. Décisions issues de la revue `agy` (2026-08-30, modèle `gemini-3.6-flash-high`)
 
