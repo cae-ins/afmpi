@@ -962,7 +962,8 @@ lu §14 sous son numéro.
     orthogonalité de Sylvester revérifiée indépendamment par l'orchestrateur (numpy) pour
     n∈{2,4,8,16,32}. Défaut `fay=0.5` non explicitement mandaté par §14.5b mais cohérent avec
     l'exemple d'API du §5 (ligne ~430) et la convention des enquêtes fédérales US.
-5c. **`ReplicateDesign` — bootstrap/SDR, et le cahier des charges enrichi** : `scale`, `rscales`,
+5c. ✅ **`ReplicateDesign` — bootstrap/SDR, et le cahier des charges enrichi** (fait, 2026-08-30,
+    172/172 tests, phase 5 complète) : `scale`, `rscales`,
     `combined_weights`, `mse` vs variance de réplicat centrée (§4, §6) — pour lire correctement
     des fichiers de poids de réplicat déjà produits par une institution. Rigueur de validation à
     égaler avec `svy` (§12) : comparer contre `survey` (R) à haute précision, documenter tout

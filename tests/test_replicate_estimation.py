@@ -595,3 +595,202 @@ def test_brr_invalid_psu_count_raises_value_error(num_psu: int):
 
     assert "S2" in str(exc_info.value)
 
+
+# -----------------------------------------------------------------------------
+# Phase 5c tests: bootstrap and SDR (PLAN.md §14.5c)
+# -----------------------------------------------------------------------------
+
+
+def test_bootstrap_determinism_same_seed_gives_identical_weights():
+    """Test #1 (5c): Même seed -> colonnes de poids identiques au bit près ; seed différent -> colonnes différentes ; jamais d'appel à numpy.random global."""
+    data = []
+    for h in range(2):
+        for p in range(3):
+            for i in range(10):
+                data.append(
+                    {
+                        "strata": f"S{h}",
+                        "psu": f"P{h}_{p}",
+                        "w": 1.0,
+                        "d1": i % 2,
+                        "d2": (i + 1) % 2,
+                    }
+                )
+    df = pl.DataFrame(data)
+
+    d_boot1 = ReplicateDesign(
+        weights="w", strata="strata", psu="psu", method="bootstrap", replicates=50, seed=42
+    )
+    d_boot2 = ReplicateDesign(
+        weights="w", strata="strata", psu="psu", method="bootstrap", replicates=50, seed=42
+    )
+    d_boot3 = ReplicateDesign(
+        weights="w", strata="strata", psu="psu", method="bootstrap", replicates=50, seed=99
+    )
+
+    f1, c1, scale1, rscales1 = generate_replicate_weights(df, d_boot1)
+    f2, c2, scale2, rscales2 = generate_replicate_weights(df, d_boot2)
+    f3, c3, scale3, rscales3 = generate_replicate_weights(df, d_boot3)
+
+    assert scale1 == scale2 == 1.0 / 50
+    assert rscales1 == rscales2 == (1.0,) * 50
+
+    for col in c1:
+        assert f1[col].to_list() == f2[col].to_list()
+
+    assert f1[c1[0]].to_list() != f3[c3[0]].to_list()
+
+
+@pytest.mark.slow
+def test_bootstrap_variance_converges_to_taylor_variance():
+    """Test #2 (5c): Bootstrap avec R = 2000 sur un petit plan converge vers la variance de linéarisation à 2 % relatif."""
+    data = []
+    import numpy as np
+
+    rng = np.random.default_rng(123)
+    for h in range(3):
+        for p in range(10):
+            for i in range(20):
+                d1 = int(rng.random() < 0.3)
+                d2 = int(rng.random() < 0.4)
+                w = float(rng.uniform(0.8, 1.5))
+                data.append(
+                    {
+                        "stratum": f"S{h}",
+                        "psu": f"P{h}_{p}",
+                        "weight": w,
+                        "d1": d1,
+                        "d2": d2,
+                    }
+                )
+
+    df = pl.DataFrame(data)
+    spec = Specification(
+        dimensions={"d1": ("d1",), "d2": ("d2",)}, weights={"d1": 0.5, "d2": 0.5}
+    )
+    s_design = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+    b_design = ReplicateDesign(
+        weights="weight",
+        strata="stratum",
+        psu="psu",
+        method="bootstrap",
+        replicates=2000,
+        seed=0,
+    )
+
+    res_taylor = estimate(df, spec, s_design, k=0.3)
+    res_boot = estimate(df, spec, b_design, k=0.3)
+
+    se_taylor = res_taylor.se().filter(pl.col("measure") == "M0")["se"].item()
+    se_boot = res_boot.se().filter(pl.col("measure") == "M0")["se"].item()
+
+    rel_diff = abs(se_boot - se_taylor) / se_taylor
+    assert rel_diff < 0.02
+
+
+def test_explicit_scale_and_rscales_override_method_defaults():
+    """Test #3 (5c): scale/rscales explicites l'emportent : le même jeu de réplicats avec scale=2*défaut donne exactement le double de variance."""
+    data = []
+    for h in range(2):
+        for p in range(3):
+            for i in range(10):
+                data.append(
+                    {
+                        "strata": f"S{h}",
+                        "psu": f"P{h}_{p}",
+                        "w": 1.0,
+                        "d1": i % 2,
+                        "d2": (i + 1) % 2,
+                    }
+                )
+    df = pl.DataFrame(data)
+    spec = Specification(
+        dimensions={"d1": ("d1",), "d2": ("d2",)}, weights={"d1": 0.5, "d2": 0.5}
+    )
+
+    d_def = ReplicateDesign(
+        weights="w", strata="strata", psu="psu", method="bootstrap", replicates=50, seed=42
+    )
+    d_double = ReplicateDesign(
+        weights="w",
+        strata="strata",
+        psu="psu",
+        method="bootstrap",
+        replicates=50,
+        seed=42,
+        scale=2.0 / 50,
+    )
+
+    res_def = estimate(df, spec, d_def, k=0.3)
+    res_double = estimate(df, spec, d_double, k=0.3)
+
+    var_def = res_def.se().filter(pl.col("measure") == "M0")["se"].item() ** 2
+    var_double = res_double.se().filter(pl.col("measure") == "M0")["se"].item() ** 2
+
+    assert var_double == pytest.approx(2.0 * var_def, abs=1e-10)
+
+
+def test_rscales_wrong_length_raises_value_error_with_both_lengths():
+    """Test #4 (5c): rscales de mauvaise longueur -> ValueError donnant les deux longueurs."""
+    with pytest.raises(ValueError) as exc_info1:
+        ReplicateDesign(
+            method="bootstrap",
+            psu="psu",
+            replicate_weights=("r1", "r2"),
+            rscales=(1.0, 1.0, 1.0),
+        )
+
+    err1 = str(exc_info1.value)
+    assert "3" in err1 and "2" in err1
+
+    data = []
+    for h in range(2):
+        for p in range(2):
+            data.append({"strata": f"S{h}", "psu": f"P{h}_{p}", "w": 1.0, "d1": 1})
+    df = pl.DataFrame(data)
+
+    with pytest.raises(ValueError) as exc_info2:
+        generate_replicate_weights(
+            df,
+            ReplicateDesign(
+                weights="w",
+                strata="strata",
+                psu="psu",
+                method="bootstrap",
+                replicates=5,
+                rscales=(1.0, 1.0),
+            ),
+        )
+
+    err2 = str(exc_info2.value)
+    assert "2" in err2 and "5" in err2
+
+
+def test_sdr_factor_sum_across_replicates_equals_R_per_psu():
+    """Test #5 (5c): SDR : la somme des facteurs de poids sur les réplicats vaut R par PSU (contrôle de cohérence de la construction)."""
+    data = []
+    for h in range(2):
+        for p in range(3):
+            for i in range(5):
+                data.append(
+                    {
+                        "strata": f"S{h}",
+                        "psu": f"P{h}_{p}",
+                        "w": 2.0,
+                        "d1": i % 2,
+                        "d2": (i + 1) % 2,
+                    }
+                )
+    df = pl.DataFrame(data)
+
+    d_sdr = ReplicateDesign(weights="w", strata="strata", psu="psu", method="SDR")
+    f_sdr, c_sdr, scale_sdr, _ = generate_replicate_weights(df, d_sdr)
+    R_sdr = len(c_sdr)
+
+    for psu_val in df["psu"].unique().to_list():
+        sub = f_sdr.filter(pl.col("psu") == psu_val)
+        w_base = sub["w"][0]
+        rep_sums = sum(sub[c][0] / w_base for c in c_sdr)
+        assert rep_sums == pytest.approx(float(R_sdr), abs=1e-12)
+
+

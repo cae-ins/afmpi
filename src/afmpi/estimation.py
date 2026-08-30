@@ -209,11 +209,6 @@ def _estimate_from_matrix(
                     )
     elif design.variance_path == "replication":
         rep_design: ReplicateDesign = design  # type: ignore[assignment]
-        if rep_design.method in ("bootstrap", "SDR"):
-            raise NotImplementedError(
-                f"method {rep_design.method!r} is not implemented in phase 5b "
-                "(scheduled for phase 5c)"
-            )
 
         if rep_design.replicate_weights is None:
             frame_work, repw_cols, scale, rscales = generate_replicate_weights(

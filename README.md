@@ -142,9 +142,22 @@ avec remise). `df = grappes − strates`. Deux bornages sont disponibles : `logi
 par construction, convention de `svyciprop`) et `normal`/`t` (symétriques, tronqués à `[0, 1]`,
 convention de `PythonIPM`).
 
+### Plans de réplication et fichiers institutionnels (`ReplicateDesign`)
+
+`ReplicateDesign` permet d'utiliser des poids de réplicats pré-calculés (provenant de fichiers d'enquêtes institutionnelles) ou de générer automatiquement des poids de réplicats (`JK1`, `JKn`, `BRR`, `Fay_BRR`, `bootstrap` Rao-Wu-Yue, `SDR`).
+
+Le tableau ci-dessous illustre la déclaration pour quatre cas d'usage institutionnels courants :
+
+| Cas d'usage / Source | Déclaration `ReplicateDesign` | Description |
+|---|---|---|
+| **Fichier DHS** (poids de réplicats fournis) | `ReplicateDesign(replicate_weights=("wt1", ..., "wtR"), combined_weights=True)` | Poids de réplicats combinés fournis directement dans l'enquête. |
+| **Fichier ACS** (SDR) | `ReplicateDesign(method="SDR", psu="cluster_id", scale=4/80)` | Réplication par différences successives (SDR) à 80 réplicats. |
+| **Poids avec `rscales` hétérogènes** | `ReplicateDesign(replicate_weights=..., scale=1.0, rscales=(r1, r2, ...))` | Facteurs `rscales_r` spécifiques par réplicat. |
+| **Fichier Fay BRR** (`fay=0.3`) | `ReplicateDesign(method="Fay_BRR", strata="stratum", psu="psu", fay=0.3)` | BRR de Fay avec coefficient de perturbation `fay=0.3`. |
+
 ## État actuel et roadmap
 
-La version `0.3.0` (durcie par le Stamp 4.5) couvre le **noyau v1 et les plans complexes (phases 0 à 4c)** ([`PLAN.md`](PLAN.md) §9, §16) :
+La version actuelle couvre le **noyau v1, les plans complexes (phases 0 à 4c + stamp 4.5) et les plans de réplication (phase 5a/5b/5c)** ([`PLAN.md`](PLAN.md) §9, §14, §16) :
 
 - spécification des dimensions et pondérations égales imbriquées ou personnalisées ;
 - politiques de valeurs manquantes `listwise_deletion` et `reweighting` ;
@@ -153,19 +166,19 @@ La version `0.3.0` (durcie par le Stamp 4.5) couvre le **noyau v1 et les plans c
 - scores individuels, `H`, `A`, `M0`, taux de privation censurés et non censurés, et
   contributions par indicateur et par dimension ;
 - linéarisation de Taylor pour tous les estimands, y compris les ratios `A` et `pctb_j` ;
-- plan de sondage à un ou plusieurs degrés (`stages=[Stage(id=..., strata=..., fpc=...)]`), FPC en fractions ou effectifs de population ;
+- plans de sondage à un ou plusieurs degrés (`stages=[Stage(id=..., strata=..., fpc=...)]`), FPC en fractions ou effectifs de population ;
 - plans PPS (avec remise / Hansen-Hurwitz, sans remise avec Sen-Yates-Grundy et Hájek) ;
 - les cinq politiques de gestion des grappes isolées (`fail`, `certainty`, `adjust`, `average`, `collapse`) ;
+- méthodes de réplication complètes : `JK1`, `JKn`, `BRR`, `Fay_BRR`, `bootstrap` (Rao-Wu-Yue) et `SDR` ;
 - erreurs-types, IC `normal`/`t`/`logit`, degrés de liberté explicites ;
 - estimation par domaine et par sous-groupe sans casser le plan, plusieurs seuils `k`,
   vérification automatique de la décomposabilité ;
 - validation numérique croisée exacte contre le package `survey` (R 4.5.3) documentée dans `tests/oracle/` ;
 - intégration continue GitHub Actions (`.github/workflows/tests.yml`) sur Python 3.10, 3.11 et 3.12.
 
-Ne sont pas encore implémentés : les méthodes de réplication (JK1/JKn/BRR/Fay BRR/bootstrap/SDR, phase 5),
-la matrice de variance-covariance complète et les tests de Wald (phase 7), la comparaison de plusieurs vagues
+Ne sont pas encore implémentés : la matrice de variance-covariance complète et les tests de Wald (phase 7), la comparaison de plusieurs vagues
 dans le temps (phase 6), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9).
-Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 5 à 12.
+Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 6 à 12.
 
 ## Attribution et licence
 

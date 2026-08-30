@@ -61,10 +61,195 @@ def generate_replicate_weights(
 ) -> tuple[pl.DataFrame, tuple[str, ...], float, tuple[float, ...]]:
     """Materialise the replicate weight columns, and their scale/rscales."""
 
-    if design.method not in ("JK1", "JKn", "BRR", "Fay_BRR"):
+    if design.method not in ("JK1", "JKn", "BRR", "Fay_BRR", "bootstrap", "SDR"):
         raise NotImplementedError(f"weight generation for {design.method!r} is not implemented")
 
     base_w = pl.col(design.weights) if design.weights is not None else pl.lit(1.0)
+
+    if design.method == "bootstrap":
+        if design.psu is None:
+            raise ValueError(
+                "psu column must be specified for bootstrap replicate weight generation"
+            )
+
+        psu_col = design.psu
+        strata_col = design.strata
+
+        if strata_col is not None:
+            strata_df = frame.select(
+                pl.col(strata_col).cast(pl.String).alias("strata_str")
+            ).unique().sort("strata_str")
+            strata_list = strata_df["strata_str"].to_list()
+        else:
+            strata_list = ["__afmpi_all__"]
+
+        psu_map: dict[str, list[str]] = {}
+        for h_key in strata_list:
+            if strata_col is not None:
+                sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
+            else:
+                sub_frame = frame
+            psu_in_h = (
+                sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
+                .unique()
+                .sort("psu_str")["psu_str"]
+                .to_list()
+            )
+            m_h = len(psu_in_h)
+            if m_h < 2:
+                raise ValueError(
+                    f"stratum {h_key!r} contains only {m_h} PSU; "
+                    "bootstrap requires at least 2 PSUs per stratum"
+                )
+            psu_map[h_key] = psu_in_h
+
+        R = design.replicates if design.replicates is not None else 200
+        if R < 2:
+            raise ValueError(f"bootstrap requires at least 2 replicates; got {R}")
+
+        if design.rscales is not None and len(design.rscales) != R:
+            raise ValueError(
+                f"rscales length ({len(design.rscales)}) must match number of replicates ({R})"
+            )
+
+        import numpy as np
+
+        rng = np.random.default_rng(design.seed)
+
+        col_names: list[str] = []
+        exprs_to_add: list[pl.Expr] = []
+
+        for r in range(R):
+            col_name = f"{_REPWGT_PREFIX}{r + 1}"
+            col_names.append(col_name)
+
+            expr_builder = None
+            for h_key in strata_list:
+                psus = psu_map[h_key]
+                m_h = len(psus)
+                drawn = rng.choice(m_h, size=m_h - 1, replace=True)
+                counts: dict[str, int] = {}
+                for idx in drawn:
+                    p_name = psus[idx]
+                    counts[p_name] = counts.get(p_name, 0) + 1
+
+                for p_name in psus:
+                    cnt = counts.get(p_name, 0)
+                    if cnt > 0:
+                        factor = (m_h / (m_h - 1.0)) * cnt
+                        if strata_col is not None:
+                            cond = (pl.col(strata_col).cast(pl.String) == h_key) & (
+                                pl.col(psu_col).cast(pl.String) == p_name
+                            )
+                        else:
+                            cond = pl.col(psu_col).cast(pl.String) == p_name
+
+                        if expr_builder is None:
+                            expr_builder = pl.when(cond).then(base_w * factor)
+                        else:
+                            expr_builder = expr_builder.when(cond).then(base_w * factor)
+
+            if expr_builder is None:
+                expr = pl.lit(0.0).alias(col_name)
+            else:
+                expr = expr_builder.otherwise(0.0).alias(col_name)
+
+            exprs_to_add.append(expr)
+
+        scale = 1.0 / R if design.scale is None else design.scale
+        rscales = (1.0,) * R if design.rscales is None else design.rscales
+        new_frame = frame.with_columns(exprs_to_add)
+        return new_frame, tuple(col_names), scale, rscales
+
+    if design.method == "SDR":
+        if design.psu is None:
+            raise ValueError(
+                "psu column must be specified for SDR replicate weight generation"
+            )
+
+        psu_col = design.psu
+        strata_col = design.strata
+
+        if strata_col is not None:
+            strata_df = frame.select(
+                pl.col(strata_col).cast(pl.String).alias("strata_str")
+            ).unique().sort("strata_str")
+            strata_list = strata_df["strata_str"].to_list()
+        else:
+            strata_list = ["__afmpi_all__"]
+
+        all_psus: list[tuple[str, str]] = []
+        for h_key in strata_list:
+            if strata_col is not None:
+                sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
+            else:
+                sub_frame = frame
+            psu_in_h = (
+                sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
+                .unique()
+                .sort("psu_str")["psu_str"]
+                .to_list()
+            )
+            for p_key in psu_in_h:
+                all_psus.append((h_key, p_key))
+
+        m = len(all_psus)
+        if m < 1:
+            raise ValueError("SDR requires at least 1 PSU")
+
+        k = math.ceil(math.log2(m + 1))
+        R = 2**k
+        if R < 4:
+            R = 4
+
+        if design.rscales is not None and len(design.rscales) != R:
+            raise ValueError(
+                f"rscales length ({len(design.rscales)}) must match number of replicates ({R})"
+            )
+
+        H_df = sylvester(R)
+        H_mat = H_df.to_numpy()
+
+        col_names: list[str] = []
+        exprs_to_add: list[pl.Expr] = []
+
+        two_pow_minus_1_5 = 2.0**-1.5
+
+        for r in range(R):
+            col_name = f"{_REPWGT_PREFIX}{r + 1}"
+            col_names.append(col_name)
+
+            expr_builder = None
+            for j_idx, (h_key, p_name) in enumerate(all_psus):
+                j = j_idx + 1
+                c1 = ((j - 1) % (R - 1)) + 1
+                c2 = (j % (R - 1)) + 1
+                diff = int(H_mat[r, c1]) - int(H_mat[r, c2])
+                factor = 1.0 + two_pow_minus_1_5 * diff
+
+                if strata_col is not None:
+                    cond = (pl.col(strata_col).cast(pl.String) == h_key) & (
+                        pl.col(psu_col).cast(pl.String) == p_name
+                    )
+                else:
+                    cond = pl.col(psu_col).cast(pl.String) == p_name
+
+                if expr_builder is None:
+                    expr_builder = pl.when(cond).then(base_w * factor)
+                else:
+                    expr_builder = expr_builder.when(cond).then(base_w * factor)
+
+            if expr_builder is None:
+                expr = pl.lit(0.0).alias(col_name)
+            else:
+                expr = expr_builder.otherwise(0.0).alias(col_name)
+
+            exprs_to_add.append(expr)
+
+        scale = 4.0 / R if design.scale is None else design.scale
+        rscales = (1.0,) * R if design.rscales is None else design.rscales
+        new_frame = frame.with_columns(exprs_to_add)
+        return new_frame, tuple(col_names), scale, rscales
 
     if design.method in ("BRR", "Fay_BRR"):
         if design.psu is None:
@@ -111,6 +296,11 @@ def generate_replicate_weights(
         R = 2**k
         if R < 4:
             R = 4
+
+        if design.rscales is not None and len(design.rscales) != R:
+            raise ValueError(
+                f"rscales length ({len(design.rscales)}) must match number of replicates ({R})"
+            )
 
         H_df = sylvester(R)
         H_mat = H_df.to_numpy()
@@ -208,6 +398,11 @@ def generate_replicate_weights(
             )
             exprs_to_add.append(expr)
 
+        if design.rscales is not None and len(design.rscales) != m:
+            raise ValueError(
+                f"rscales length ({len(design.rscales)}) must match number of replicates ({m})"
+            )
+
         scale = (m - 1) / m if design.scale is None else design.scale
         rscales = (1.0,) * m if design.rscales is None else design.rscales
         new_frame = frame.with_columns(exprs_to_add)
@@ -279,6 +474,11 @@ def generate_replicate_weights(
                     .alias(col_name)
                 )
             exprs_to_add.append(expr)
+
+    if design.rscales is not None and len(design.rscales) != len(col_names):
+        raise ValueError(
+            f"rscales length ({len(design.rscales)}) must match number of replicates ({len(col_names)})"
+        )
 
     scale = 1.0 if design.scale is None else design.scale
     rscales = tuple(rscales_list) if design.rscales is None else design.rscales

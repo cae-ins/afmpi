@@ -23,6 +23,7 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+  "numpy>=1.24",
   "pandas>=2.0",
   "polars>=1.0",
   "pyarrow>=14",
@@ -47,3 +48,6 @@ packages = ["src/afmpi"]
 addopts = "-ra"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

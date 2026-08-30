@@ -14,8 +14,7 @@ _VALID_METHODS = {"JK1", "JKn", "BRR", "Fay_BRR", "bootstrap", "SDR"}
 class ReplicateDesign(Design):
     """Replicate-weight design: the estimand is re-evaluated, never linearized.
 
-    Methods JK1, JKn, BRR, Fay_BRR are supported. Methods bootstrap,
-    SDR (phase 5c) raise NotImplementedError.
+    Methods JK1, JKn, BRR, Fay_BRR, bootstrap, and SDR are supported.
     """
 
     variance_path: ClassVar[str] = "replication"
@@ -40,11 +39,14 @@ class ReplicateDesign(Design):
             raise ValueError(
                 f"method must be one of {sorted(_VALID_METHODS)}; got {self.method!r}"
             )
-        if self.method in ("bootstrap", "SDR"):
-            raise NotImplementedError(
-                f"method {self.method!r} is not implemented in phase 5b "
-                "(scheduled for phase 5c)"
-            )
+
+        if self.method == "bootstrap":
+            if self.replicates is None:
+                object.__setattr__(self, "replicates", 200)
+            elif not isinstance(self.replicates, int) or self.replicates < 2:
+                raise ValueError(
+                    f"bootstrap requires at least 2 replicates; got {self.replicates!r}"
+                )
 
         for field_name in ("weights", "household_size", "strata", "psu"):
             value = getattr(self, field_name)
