@@ -1,7 +1,16 @@
 # Plan — `afmpi` : un package Python pour l'IPM (méthode Alkire-Foster)
 
-**Statut** : proposition, pas encore implémentée. À évaluer et améliorer par `agy`, puis à
-exécuter par `Sol` dans ce dossier (`C:\Users\f.migone\Desktop\projects\actif\afmpi\`).
+**Statut** (mis à jour 2026-08-30) : le **noyau v1 est implémenté** — phases 0 à 3 du §9,
+publiées sur `cae-ins/afmpi`, tag `v0.2.0`, 104/104 tests verts. Les phases 4a et suivantes
+restent à faire ; leur spécification d'exécution complète (signatures, formules, cas limites,
+points d'intégration au code existant) est au **§14**, qui fait foi pour tout implémenteur.
+Dossier de travail : `C:\Users\f.migone\Desktop\projects\actif\afmpi\`.
+
+**Comment lire ce document pour implémenter** : §1-§8 donnent le pourquoi et le cahier des
+charges ; §9 donne le découpage en phases ; §10-§13 sont l'historique daté des revues (à ne pas
+réécrire) ; **§14 est la spécification exécutable des phases restantes**. En cas de désaccord
+apparent entre §14 et une section antérieure, §14 fait foi, car il a été écrit après lecture du
+code réellement livré.
 
 **Emplacement** : projet **indépendant**, volontairement hors du dépôt `IPM_CI` (branche
 `IPM-python`, déjà suivie par git pour un pipeline spécifique à la Côte d'Ivoire/EHCVM 2021) —
@@ -358,6 +367,28 @@ afmpi/
     └── quickstart.md
 ```
 
+**État réel de cette arborescence au 2026-08-30 (Claude, après lecture du dépôt)** — cette
+distinction est nécessaire pour savoir ce qu'on *modifie* et ce qu'on *crée* :
+
+- **Existent** : `pyproject.toml`, `README.md`, `PLAN.md`, `LICENSE`, et dans `src/afmpi/` :
+  `__init__.py`, `specification.py`, `survey_design.py`, `deprivation.py`, `estimands.py`,
+  `linearization.py`, `variance.py`, `domain.py`, `estimation.py`, `results.py`. Dans `tests/` :
+  `test_specification.py`, `test_survey_design.py`, `test_linearization.py`, `test_domain.py`,
+  `test_estimation.py`, `test_invariants.py` (104 tests au total).
+- **N'existent pas encore** : `backend.py`, `io.py`, `replicate_design.py`,
+  `replicate_estimation.py`, `census_design.py`, `contributions.py`, `decomposition.py`,
+  `robustness.py`, `change_over_time.py`, `missing.py`, `docs/`, `CHANGELOG.md`, et les fichiers
+  de tests correspondants.
+- **Écarts assumés entre l'arborescence cible ci-dessus et le code livré**, à ne pas « corriger »
+  en créant des modules vides : `contributions.py`, `decomposition.py` et `robustness.py` n'ont
+  pas été créés parce que leur contenu est déjà couvert sans duplication — les contributions sont
+  des estimands comme les autres (`estimands.build` produit `actb`/`pctb`/`actb_dim`/`pctb_dim`),
+  la décomposabilité est vérifiée dans `estimation._assert_decomposable` et exposée par
+  `EstimationResult.decomposition()`, et la robustesse à k est la boucle sur `cutoffs` de
+  `_estimate_from_matrix`. **Ces trois modules restent délibérément non créés** : les phases
+  restantes ne doivent pas les ressusciter. §14 dit, pour chaque phase, quel fichier existant
+  modifier et quel fichier créer.
+
 ## 6. Trois familles de plans d'enquête, domaines, et l'API publique
 
 **Principe (utilisateur, 2026-08-30)** : la méthode *ultimate cluster* seule ne suffit pas à
@@ -525,10 +556,17 @@ doit être **explicite**, pas le comportement par défaut silencieux dès qu'un 
 existe dans les données. C'est une sous-phase testée à part entière (§9), pas une simple option
 supplémentaire de `change_over_time.py`.
 
-Point de design encore ouvert :
-- API orientée objets (`Specification`, `SurveyDesign`/`ReplicateDesign`/`CensusDesign`,
-  `EstimationResult`) vs fonctionnelle pure (fonctions + dataclasses immuables) — privilégier ce
-  qui teste le plus facilement.
+Point de design **tranché** (Claude, 2026-08-30, à la lecture du code des phases 0-3 déjà
+livré) :
+- ~~API orientée objets vs fonctionnelle pure~~ → **les deux, dans la répartition déjà en place**
+  et à ne plus rediscuter : les objets de configuration et de résultat sont des **dataclasses
+  gelées** (`@dataclass(frozen=True, slots=True)` — `SurveyDesign`, `DesignDegrees`,
+  `RatioEstimand`, `RatioTotals`, `Domain`, `DeprivationMatrix`, `EstimationResult`), le calcul
+  est fait de **fonctions libres au niveau module** (`deprivation.build`, `estimands.build`,
+  `linearization.cluster_sums`, `variance.taylor_variance`, …), et `Specification` est la seule
+  classe mutable, parce qu'elle est construite de façon fluide (`set()`/`set_weights()` renvoient
+  `self`). Toute nouvelle phase suit cette répartition : un nouveau design est une dataclass
+  gelée, un nouvel estimateur est une fonction de module.
 
 **Revu et affiné en profondeur (Claude, 2026-08-30, voir §12)** : `estimate()` fusionne
 désormais ce qui aurait été un `compare_over_time()` séparé (paramètres `tvar`/`cot_year`,
@@ -812,22 +850,33 @@ ajoute autant de surface que le cahier des charges du §4 le permettrait.
 0. ✅ **Socle** (fait, 2026-08-30, tag `v0.1.0`) : `Specification`, `SurveyDesign` minimal (poids
    simples uniquement), `estimate()` en Polars in-memory pour un seul k sans plan de sondage,
    `EstimationResult` (`coef()`, `to_frame()`). 16/16 tests. Publié sur `cae-ins/afmpi`.
-1. **Linéarisation Taylor** (§5 — corrigé : ce chemin n'alimente QUE `SurveyDesign`, pas
-   `ReplicateDesign`, voir la correction architecturale du §5) : `linearization.py` — fonctions
-   d'influence pour A et pctbⱼ, testées indépendamment de tout plan de sondage
-   (`test_linearization.py`). Sans cet étage, tout ce qui suit reproduirait le défaut du plan
-   initial (une fonction de variance par estimand, non composable).
-2. **`SurveyDesign` de base** : poids + strates simples + PSU (un degré), méthodes d'IC normal/t/
-   logit consommant les variables linéarisées de la phase 1, `degf()` explicite dès cette phase
-   (§6 — pas ajouté après coup, pour ne pas devoir revenir sur l'API de résultat plus tard).
-   Tests contre un exemple `mpitb` officiel et contre `survey` (R) sur un design SRS/stratifié
-   simple.
-3. **Domaines et désagrégation** : `domain.py` (estimation par sous-population sans casser le
-   design — §6), `over=[...]`, décomposabilité vérifiée par assertion (`Σφˡ·M0ˡ = M0`), `klist`
-   (robustesse à k). Tests : domaines qui traversent les strates, très petits domaines.
+1. ✅ **Linéarisation Taylor** (fait, 2026-08-30, tag `v0.2.0`) (§5 — corrigé : ce chemin
+   n'alimente QUE `SurveyDesign`, pas `ReplicateDesign`, voir la correction architecturale du
+   §5) : `linearization.py` — fonctions d'influence pour A et pctbⱼ, testées indépendamment de
+   tout plan de sondage (`test_linearization.py`). Sans cet étage, tout ce qui suit reproduirait
+   le défaut du plan initial (une fonction de variance par estimand, non composable).
+   *Livré* : `estimands.py` (compilateur `T(·)` : tout estimand est un ratio
+   `Σn·y / Σn·x`), `linearization.py` (`u_i = n_i(y_i − R·x_i)/X`, plus l'identité par grappe
+   `u_hc = (SY_hc − R·SX_hc)/X` qui permet l'effondrement précoce du §7).
+2. ✅ **`SurveyDesign` de base** (fait, 2026-08-30, tag `v0.2.0`) : poids + strates simples + PSU
+   (un degré), méthodes d'IC normal/t/logit consommant les variables linéarisées de la phase 1,
+   `degf()` explicite dès cette phase (§6 — pas ajouté après coup, pour ne pas devoir revenir
+   sur l'API de résultat plus tard). *Livré* : `survey_design.py`, `variance.py`
+   (`taylor_variance`, `DesignDegrees`, `confidence_interval`), `results.py`.
+   *Reste dû à cette phase, reporté en phase 10* : la comparaison numérique contre un exemple
+   `mpitb` officiel et contre `survey` (R), qui demande les fichiers de référence du §14.10.
+3. ✅ **Domaines et désagrégation** (fait, 2026-08-30, tag `v0.2.0`) : `domain.py` (estimation
+   par sous-population sans casser le design — §6), `over=[...]`, décomposabilité vérifiée par
+   assertion (`Σφˡ·M0ˡ = M0`, `DECOMPOSITION_TOLERANCE = 1e-9`), `klist` (robustesse à k).
+   Tests : domaines qui traversent les strates, très petits domaines.
 
 *(Fin du noyau v1. Les phases suivantes élargissent le cahier des charges vers le v2 complet du
 §4 — chacune est un ajout de surface indépendant, pas un correctif du noyau.)*
+
+**Chaque phase ci-dessous a sa spécification exécutable au §14, sous le même numéro** (phase 4a →
+§14.4a, phase 7 → §14.7, etc.). Les entrées ci-dessous restent le *périmètre* de la phase ; §14
+en donne les signatures, les formules et les cas limites. Ne pas implémenter une phase sans avoir
+lu §14 sous son numéro.
 
 4a. **`SurveyDesign` multi-degrés** : `stages=[Stage(...)]` arbitraire (§6 — pas figé à
     psu=/ssu=), FPC par degré, agrégation hiérarchique personnes→TSU→SSU→PSU→strate (§7).
@@ -881,10 +930,30 @@ ajoute autant de surface que le cahier des charges du §4 le permettrait.
     jour. Publication PyPI : jalon distinct, sur nouvelle confirmation explicite de
     l'utilisateur à chaque fois (pas un blanc-seing permanent).
 
-*(Note : seule la phase 0 est faite au 2026-08-30. Les phases 1 à 12 (dont plusieurs scindées en
-sous-phases a/b/c) restent à faire — c'est un programme de travail substantiel, pas une
-correction ponctuelle. Le noyau v1 (phases 0-3) doit être la priorité absolue des prochaines
-passes `Sol` ; les phases 4a et au-delà peuvent s'étaler sur autant de passes que nécessaire.)*
+*(Note, révisée le 2026-08-30 : ~~seule la phase 0 est faite~~ — le **noyau v1 (phases 0 à 3) est
+livré**, tag `v0.2.0`, 104/104 tests verts. Les phases 4a à 12 restent à faire ; elles peuvent
+s'étaler sur autant de passes que nécessaire, dans l'ordre du §14.0 « ordre d'exécution et
+dépendances ».)*
+
+### Règle de non-régression valable pour toutes les phases restantes
+
+Aucune phase 4a-12 n'a le droit de casser une garantie déjà livrée. Concrètement, à la fin de
+chaque phase :
+
+1. `pytest` passe intégralement (les 104 tests du noyau v1 **plus** ceux ajoutés par la phase) ;
+   aucun test existant n'est supprimé ni assoupli pour faire passer du code neuf.
+2. Les signatures publiques déjà livrées restent compatibles : `estimate(df, spec, design, *, k,
+   over, domain, ci_method, level, check_decomposability)` ne perd aucun paramètre et n'en rend
+   aucun obligatoire ; tout nouveau paramètre est **keyword-only avec une valeur par défaut qui
+   reproduit exactement le comportement actuel**. Idem pour les champs des dataclasses gelées :
+   on ajoute à la fin, jamais au milieu (`SurveyDesign("w", "taille")` en positionnel doit
+   continuer de marcher — un test l'utilise).
+3. Les colonnes de `_ESTIMATE_SCHEMA` (`estimation.py`) ne sont ni renommées ni retirées ; une
+   phase qui produit une nouvelle famille de lignes crée **une table à part** exposée par une
+   nouvelle méthode de `EstimationResult` (par exemple `changes()` en 6a), elle n'élargit pas la
+   table principale.
+4. Les invariants de `test_invariants.py` (M0 = H·A, Σactbⱼ = M0, Σpctbⱼ = 1, Σφˡ·M0ˡ = M0)
+   restent vrais pour toute nouvelle famille de design, avec les mêmes tolérances.
 
 ## 10. Décisions issues de la revue `agy` (2026-08-30, modèle `gemini-3.6-flash-high`)
 
@@ -920,12 +989,25 @@ correspondantes (§4, §6, §7, §9). Rapport complet dans
 
 ## 11. Points ouverts (à trancher avant ou pendant l'implémentation)
 
-- Faut-il qu'`afmpi` sache lire directement un `vecteur_z`/`vecteur_w` façon `PythonIPM`, pour
-  faciliter une migration future du pipeline CI dessus ? (Hors périmètre §2, mais un adaptateur
-  léger coûterait peu.)
-- Où trouver des jeux de données `mpitb` de référence publiquement rejouables sans dépendre d'un
-  accès Stata (licence) ? À vérifier — CRAN `mpitbR`/`mpindex` embarquent parfois des exemples en
-  `.rda`, plus faciles à récupérer qu'un `.dta` Stata protégé.
+- ~~Faut-il qu'`afmpi` sache lire directement un `vecteur_z`/`vecteur_w` façon `PythonIPM` ?~~
+  **Tranché (Claude, 2026-08-30) : non.** `afmpi` prend en entrée des indicateurs déjà binarisés
+  (`g0`, 0/1 ou booléens — validation stricte déjà implémentée dans
+  `deprivation._validate_and_normalize_indicators`), conformément au hors-périmètre du §2 (« le
+  package prend un DataFrame déjà propre en entrée »). L'application des seuils `z` aux variables
+  brutes est spécifique à chaque enquête : c'est le travail du pipeline appelant. Un adaptateur
+  `vecteur_z` appartiendrait donc à `IPM_CI`, pas à `afmpi` — et `afmpi` ne doit rien contenir de
+  spécifique à la Côte d'Ivoire. Aucune phase du §9 ne l'implémente.
+- **Point ouvert maintenu — jeux de données `mpitb` de référence.** Où trouver des jeux de
+  données `mpitb` publiquement rejouables sans accès Stata (licence) ? À vérifier — CRAN
+  `mpitbR`/`mpindex` embarquent parfois des exemples en `.rda`, plus faciles à récupérer qu'un
+  `.dta` Stata protégé. *Pourquoi ce point reste ouvert* : il dépend d'une disponibilité externe
+  et éventuellement d'une licence, pas d'un choix de conception — aucun agent ne peut le trancher
+  seul. *Ce qui est tranché malgré tout*, pour que la phase 10 soit exécutable sans lui : la
+  suite de conformité **ne dépend pas** de ces fichiers (§14.10) — elle repose sur des jeux
+  synthétiques déterministes et des sorties de référence figées en JSON dans le dépôt. La
+  comparaison à `mpitb` est un test **supplémentaire**, marqué `@pytest.mark.optional` et
+  automatiquement ignoré (`pytest.skip`) si le fichier de référence n'est pas présent. La phase
+  10 est donc terminable même si ce point reste ouvert.
 
 ## 12. Analyse comparative approfondie des meilleurs packages (Claude, 2026-08-30)
 
@@ -1041,12 +1123,24 @@ estimate.to_polars()
   que des dizaines de méthodes à plat sur un seul objet — à évaluer pour `EstimationResult` si sa
   surface grandit (ex. `resultat.contributions.censored` / `.uncensored` plutôt que deux méthodes
   distinctes) ; pas urgent en phase 1-3, à trancher quand la phase 4+ ajoute de la matière.
+  *(**Tranché, Claude 2026-08-30** : **non**, pas de namespaces. `EstimationResult` garde des
+  méthodes à plat — c'est ce que les phases 0-3 ont livré (`coef`, `se`, `cv`, `confint`, `degf`,
+  `estimates`, `to_frame`, `contributions`, `dimension_contributions`, `scores`, `decomposition`,
+  `domain`, `summary`) et les phases restantes en ajoutent au même niveau (`vcov`, `test`,
+  `changes`, `diagnostics`, `missing_report`). Une quinzaine de méthodes reste lisible ; un
+  changement de forme d'API après publication de `v0.2.0` coûterait plus que le confort gagné.)*
 - **Colonnes de résultat minimales et sobrement nommées** (`est, se, lci, uci, cv, df`) — bon
   benchmark pour `to_frame()` : `afmpi` a tendance (héritage direct de `PythonIPM`) à des noms
   français longs (`taux_privation_non_censure`) ; garder les noms français dans les sorties
   destinées à un public francophone (cohérent avec `PythonIPM`) mais envisager des alias courts
   en anglais dans l'API interne/programmatique, pour rester ergonomique en usage `pandas`/`polars`
   courant. Point à trancher par `agy` ou à l'usage, pas une conclusion ferme ici.
+  *(**Tranché, Claude 2026-08-30**, par le code livré en phases 0-3 : les **noms de colonnes et
+  d'API sont en anglais court** — `est, se, lci, uci, cv, df, measure, indicator, dimension,
+  weight, k, over, subgroup, obs, population` (`_ESTIMATE_SCHEMA` dans `estimation.py`), et les
+  docstrings sont en anglais. Le français reste la langue du `PLAN.md`, du `README.md` et des
+  messages destinés à l'utilisateur final. Aucune phase restante n'introduit d'alias français
+  dans les données de sortie : une seule convention, celle déjà publiée.)*
 - **Typage explicite des variables catégorielles** (`svy.Cat("urbrur")` dans `sample.glm.fit()`)
   — renforce la décision déjà prise (§8, angle mort ajouté par `agy`) de valider strictement le
   typage des indicateurs (0/1 ou booléen, refus explicite sinon) : `svy` applique la même
@@ -1175,3 +1269,1549 @@ c'est-à-dire la note du *plan*, pas encore du code, qui n'existe pas au-delà d
 | Big data | 9,5/10 |
 | Recensement | 10/10 |
 | Ambition globale | 10/10 |
+
+## 14. Spécification exécutable des phases 4a à 12 (Claude, 2026-08-30)
+
+**Pourquoi cette section existe.** Les §1-§13 disent *quoi* faire et *pourquoi*. Après la
+livraison du noyau v1 (phases 0-3, tag `v0.2.0`), l'utilisateur a demandé (2026-08-30) que le
+plan soit rendu suffisamment précis pour être exécuté **par un modèle qui n'a vu ni la
+conversation de conception ni les revues précédentes**, avec pour seule consigne d'être fidèle au
+plan. Tout ce qui restait à trancher par jugement a donc été tranché ici : signatures exactes,
+formules complètes, comportement normatif de chaque cas limite, et pour chaque phase le fichier à
+créer ou à modifier. Ce n'est **pas** un élargissement du périmètre : là où cette section diverge
+d'une esquisse antérieure, c'est toujours pour resserrer (§14.0.C liste explicitement les
+éléments retirés).
+
+**Statut normatif.** §14 fait foi. Il a été écrit après lecture du code réellement livré ; les
+esquisses d'API des §5-§7 sont antérieures au code et doivent être lues comme de l'intention, pas
+comme des signatures.
+
+### 14.0 Conventions transverses, ordre d'exécution, cas limites
+
+#### A. Conventions de code (déduites du noyau v1 — à respecter, pas à réinventer)
+
+1. Python ≥ 3.10. Chaque module commence par un docstring d'une ligne, puis `from __future__
+   import annotations`.
+2. **Docstrings en anglais**, formules en bloc `.. code-block:: text`. Le docstring de module dit
+   à quel étage du pipeline §5 il appartient et ce qu'il ne fait **pas** (voir
+   `linearization.py`, `variance.py` : c'est le style attendu).
+3. Longueur de ligne maximale **96** caractères (le maximum observé dans le code livré).
+4. Objets de configuration et de résultat : `@dataclass(frozen=True, slots=True)`. Calcul :
+   fonctions libres au niveau module. Une seule classe mutable, `Specification`.
+5. Toutes les colonnes internes sont préfixées `__afmpi` ; `deprivation._validate_required_columns`
+   refuse déjà toute colonne d'entrée portant ce préfixe. Les noms de colonnes internes sont
+   produits par des fonctions (`deprived_column(index)`, `observed_column(index)`,
+   `contribution_column(index)`) ou par des constantes de module (`WEIGHT`, `SCORE`, `STRATUM`,
+   `PSU`) — jamais écrits en clair ailleurs.
+6. Polars uniquement pour le calcul : expressions `pl.Expr`, `group_by`/`agg`, `pl.when().then()`.
+   Aucun aller-retour par pandas ou numpy dans un chemin de calcul. `pandas` n'intervient qu'à
+   l'ingestion (`pl.from_pandas`) et à la sortie (`EstimationResult._convert`).
+7. Erreurs : `ValueError` pour une donnée ou une combinaison d'options invalide, `TypeError` pour
+   un mauvais type, avec un message qui nomme la colonne ou l'option fautive et, quand c'est
+   utile, montre les valeurs fautives (`invalid[:5]`, comme dans `deprivation.py`). Jamais de
+   coercition silencieuse.
+8. Aucune nouvelle dépendance au-delà de `pandas`, `polars`, `pyarrow`, `scipy`, plus **`numpy`**
+   (à ajouter à `pyproject.toml` en phase 5c, uniquement pour `numpy.random.default_rng`, le seul
+   générateur pseudo-aléatoire reproductible requis). Aucune dépendance à R, Stata, `svy`,
+   `samplics` ou `narwhals`, ni en exécution ni en test.
+9. Tests : `pytest`, données synthétiques déterministes construites avec `random.Random(seed)` ou
+   `numpy.random.default_rng(seed)` (patron de `tests/test_invariants.py`), jamais de réseau,
+   jamais de données EHCVM/RGPH réelles. Chaque phase ajoute son fichier de test ; aucun test
+   existant n'est supprimé ni assoupli.
+
+#### B. Signature cible de `estimate()` à la fin de la phase 12
+
+Chaque phase ajoute ses paramètres à la place indiquée ci-dessous, tous **keyword-only** et tous
+avec une valeur par défaut qui reproduit le comportement de `v0.2.0` :
+
+```python
+def estimate(
+    df: pd.DataFrame | pl.DataFrame | pl.LazyFrame,
+    spec: Specification,
+    design: SurveyDesign | ReplicateDesign | CensusDesign | None = None,
+    *,
+    k: float | Sequence[float] = 1 / 3,          # phase 0
+    over: str | Sequence[str] | None = None,     # phase 3
+    domain: str | pl.Expr | None = None,         # phase 3
+    ci_method: str = "logit",                    # phase 2
+    level: float = 0.95,                         # phase 2
+    check_decomposability: bool = True,          # phase 3
+    tvar: str | None = None,                     # phase 6a
+    cot_year: str | None = None,                 # phase 6a
+    overlap: str = "auto",                       # phase 6b : "auto"|"independent"|"panel"
+    panel_id: str | None = None,                 # phase 6b
+    lazy: bool = False,                          # phase 9
+) -> EstimationResult | LazyEstimation:
+```
+
+Aucun autre paramètre n'est ajouté à `estimate()`. Tout le reste est porté par `spec` (politique
+de valeurs manquantes) ou par `design` (structure, réplicats, PPS, PSU isolé).
+
+#### C. Ce que les §5-§7 esquissaient et qui est **retiré** du périmètre (tranché ici)
+
+Retirer ces éléments est un resserrement délibéré, pas un oubli. Ne pas les implémenter.
+
+1. **`estimate(missing=...)`** — retiré. La politique de valeurs manquantes appartient à
+   `Specification(missing_policy=...)`, décision déjà prise et livrée en phase 0 : elle est
+   consubstantielle à la définition des indicateurs (elle change `c_i`), pas à l'estimation.
+   Phase 8 étend `Specification.missing_policy`, elle n'ajoute rien à `estimate()`.
+2. **`estimate(backend="polars"|"pandas")`** — retiré. Le moteur est Polars, toujours ; la
+   *famille* de la sortie suit celle de l'entrée (`DeprivationMatrix.input_kind` +
+   `EstimationResult._convert`), ce qui donne déjà à l'utilisateur pandas tout ce qu'un
+   `backend="pandas"` lui aurait donné, sans un second moteur à maintenir et à valider. Le
+   « backend pandas naïf » du §7 reste ce qu'il a toujours été : un **script de comparaison de
+   performance** (`benchmarks/pandas_naive.py`, phase 9), pas une option d'API supportée.
+3. **Le raccourci `ids=[...]`, `fpc=[...]` du §6** — retiré. Deux façons de déclarer un plan
+   suffisent : `strata=`/`psu=` pour un degré (déjà livré), `stages=[Stage(...)]` pour le cas
+   général (phase 4a). Une troisième forme serait de la surface d'API à tester sans gain.
+4. **`contributions.py`, `decomposition.py`, `robustness.py`** — restent non créés (voir la note
+   d'état de l'arborescence, §5).
+5. **Interopérabilité `svy.Sample`/`svy.Design` en entrée** (§12.A) — hors périmètre des phases
+   4a-12, à ne pas commencer.
+
+#### D. Comportement normatif des cas limites (valable pour **toutes** les phases)
+
+Ce tableau fige ce que le noyau v1 fait déjà. Aucune phase restante n'a le droit de le changer ;
+chaque nouvelle famille de design doit le reproduire. Un cas limite se traduit toujours par une
+valeur explicitement absente, jamais par une valeur inventée ni par une exception qui ferait
+tomber tout un lot d'estimations.
+
+| Cas | `est` | `se` | `lci`/`uci` | `cv` | Note |
+|---|---|---|---|---|---|
+| `k = 0` | `H = 1` exactement | `0.0` | `1.0`/`1.0` | `0.0` | `u_i = 0` pour tout `i`, donc variance nulle *par construction*, pas par arrondi. `A = M0 = Σn·c/Σn` |
+| `k = 1`, personne à `c_i = 1` | `H = 0`, `M0 = 0`, `A = None` | `0.0` pour H/M0, `nan` pour A | `nan` pour A | `nan` | `A` a un dénominateur nul → `RatioTotals.value is None` ; idem `pctb`/`pctb_dim` |
+| Zéro pauvre à un `k` donné | idem ligne précédente | idem | idem | idem | même mécanique, ce n'est pas un cas particulier de plus |
+| Tout le monde pauvre | `H = 1`, `A = Σn·c/Σn` | `se(H) = 0` | `[1,1]` | `0.0` | l'IC logit est indéfini sur la borne : repli documenté sur l'intervalle tronqué (`variance.confidence_interval`) |
+| Domaine vide (`domain=`) | — | — | — | — | `ValueError` levée par `domain.validate` **avant** tout calcul : ici l'exception est correcte, l'utilisateur a demandé une chose vide explicitement |
+| Sous-groupe `over=` sans observation dans une grappe | contribue `0` | — | — | — | `estimation._align` conserve la grappe avec des sommes nulles : c'est ce qui garde la variance juste (§6) |
+| Strate à PSU unique | valeur normale | selon `lonely_psu` (§14.4c) | selon | selon | par défaut `"fail"` → `nan`, et un `LonelyPSUWarning` |
+| `df < 1` | valeur normale | `nan` | `nan` | `nan` | vrai quelle que soit la politique de PSU isolé |
+| Poids nul sur une ligne | contribue `0` | — | — | — | autorisé (`weights >= 0`) ; c'est le mécanisme même des domaines |
+| `household_size <= 0` | — | — | — | — | `ValueError` : la taille de ménage est un multiplicateur de comptage, elle doit être strictement positive |
+| Ratio indéfini dans **un** réplicat (phase 5) | valeur normale | `nan` | `nan` | `nan` | un seul `θ̂⁽ʳ⁾` indéfini rend toute la variance de réplicat indéfinie ; ne pas ignorer le réplicat |
+
+#### E. Ordre d'exécution et dépendances entre phases
+
+```
+4a ──► 4b ──┐
+       4c ──┴──► 7 ──► 10 ──► 11 ──► 12
+5a ──► 5b ──► 5c ──┘      ▲
+6a ──► 6b ─────────┘      │
+8 ─────────────────────────┤
+9 ─────────────────────────┘
+```
+
+- **4a avant 4b et 4c** : les deux consomment la notion de degré et la table de sommes par
+  grappe généralisée introduite en 4a.
+- **5a avant 5b avant 5c** : 5a pose `ReplicateDesign`, la réévaluation par lots et la formule
+  générale de variance de réplicat ; 5b n'ajoute qu'un générateur de poids ; 5c n'ajoute que des
+  générateurs supplémentaires et l'honneur des paramètres fournis.
+- **6a avant 6b** : 6b ne change aucune formule de 6a, il change seulement la détection du
+  recouvrement (§14.6b).
+- **7 après 4c, 5c et 6b** : la VCOV et les tests doivent couvrir les trois familles de design et
+  les comparaisons temporelles ; les écrire avant obligerait à y revenir.
+- **8 et 9 sont indépendantes** du reste et peuvent être faites à tout moment après 4a.
+- **10 après tout le reste** : la suite de conformité teste ce qui existe.
+- **11 puis 12** : documentation à jour puis publication.
+
+Une phase peut être livrée seule, avec son propre commit et ses propres tests. Ne pas grouper
+plusieurs phases dans un commit : le §13 documente que c'est précisément ce qui rend une passe
+d'agent ingérable.
+
+---
+
+### 14.4a — `SurveyDesign` multi-degrés, FPC par degré
+
+**Fichiers** : modifier `survey_design.py`, `deprivation.py`, `variance.py`, `estimation.py` ;
+créer `tests/test_multistage.py`.
+
+#### Objets
+
+```python
+@dataclass(frozen=True, slots=True)
+class Stage:
+    """One sampling stage: its unit identifier, its stratification, its FPC."""
+
+    id: str
+    strata: str | None = None
+    fpc: str | None = None
+```
+
+`SurveyDesign` gagne **trois champs supplémentaires, ajoutés à la fin et keyword-only**, pour ne
+pas casser `SurveyDesign("ponderation_menage", "taille_menage")` en positionnel :
+
+```python
+    stages: tuple[Stage, ...] | None = field(default=None, kw_only=True)
+    pps: PPSDesign | None = field(default=None, kw_only=True)      # phase 4b
+    lonely_psu: str = field(default="fail", kw_only=True)           # phase 4c
+```
+
+Validation ajoutée à `__post_init__` :
+
+- `stages` et (`strata` ou `psu`) sont **mutuellement exclusifs** → `ValueError` nommant les deux
+  formes. Message : `"declare either strata=/psu= (one stage) or stages=[Stage(...)], not both"`.
+- `stages`, si fourni, est non vide ; les `id` sont deux à deux distincts ; aucun `id`,
+  `strata` ou `fpc` ne coïncide avec `weights` ou `household_size`.
+- `lonely_psu` ∈ `{"fail", "certainty", "adjust", "average", "collapse"}` (§14.4c).
+
+**Champs déclarés en 4a mais honorés plus tard — règle anti-silence.** `pps` et `lonely_psu` sont
+ajoutés dès 4a pour que la forme de `SurveyDesign` soit stable, mais leur sémantique arrive en 4b
+et 4c. Tant que ces phases ne sont pas faites : `pps` est annoté `object | None` et toute valeur
+non `None` lève `NotImplementedError("PPSDesign is phase 4b")` ; toute valeur de `lonely_psu`
+autre que `"fail"` lève `NotImplementedError("lonely_psu=... is phase 4c")`. **Jamais un
+paramètre accepté puis ignoré** — c'est exactement le reproche fait au package PyPI `mpitb` au
+§1. En 4b, l'annotation devient `PPSDesign | None` et `survey_design.py` importe `pps.py` ; en
+4c, les cinq valeurs deviennent effectives.
+
+Nouvelle propriété, **le seul point d'entrée** que le reste du code doit utiliser :
+
+```python
+    @property
+    def resolved_stages(self) -> tuple[Stage, ...]:
+        """Canonical stage list, whichever declaration form was used."""
+```
+
+- `stages` fourni → `stages` tel quel ;
+- sinon `psu` fourni → `(Stage(id=self.psu, strata=self.strata, fpc=None),)` ;
+- sinon → `()` — chaque ligne est sa propre PSU, variance SRS avec remise (comportement livré).
+
+`design_columns` renvoie désormais, dans cet ordre : tous les `strata` de degré, tous les `id` de
+degré, tous les `fpc` de degré, sans doublon et sans `None`.
+
+#### Identifiants matérialisés (`deprivation.py`)
+
+Deux fonctions nouvelles, qui préservent exactement les noms actuels au degré 1 :
+
+```python
+def stratum_column(level: int) -> str:   # level >= 1
+    return STRATUM if level == 1 else f"__afmpi_stratum{level}"
+
+def psu_column(level: int) -> str:       # level >= 1
+    return PSU if level == 1 else f"__afmpi_psu{level}"
+
+def fraction_column(level: int) -> str:  # sampling fraction f of that stage
+    return f"__afmpi_f{level}"
+```
+
+Emboîtement (généralisation exacte de `_add_design_identifiers`, qui fait déjà cela au degré 1) :
+
+```
+stratum_1 = str(strata_1)            ou "__afmpi_all__" si non déclarée
+psu_1     = stratum_1 + "|" + str(id_1)
+stratum_s = psu_{s-1} + "|" + str(strata_s)   (ou psu_{s-1} + "|" si non déclarée)
+psu_s     = stratum_s + "|" + str(id_s)
+```
+
+Un identifiant nul devient `"__afmpi_null__"` (convention déjà en place). Cet emboîtement rend
+correct un plan qui numérote ses grappes `1, 2, …` à l'intérieur de chaque strate, et rend
+impossible qu'une unité chevauche deux unités parentes.
+
+#### Correction de population finie — règle d'interprétation
+
+Le `fpc` d'un degré `s` est lu **par cellule de variance**, c'est-à-dire par valeur distincte de
+`stratum_column(s)` :
+
+1. La colonne doit être **constante à l'intérieur de chaque cellule** ; sinon `ValueError` nommant
+   la cellule et les valeurs trouvées.
+2. Si **toutes** les valeurs non nulles de la colonne, sur tout l'échantillon, sont `≤ 1` : ce
+   sont des **fractions de sondage** `f`, utilisées telles quelles. Exiger `0 ≤ f ≤ 1`.
+3. Sinon : ce sont des **effectifs de population** `N` d'unités du degré `s` dans la cellule.
+   Alors `f = m / N`, où `m` est le nombre d'unités **distinctes du degré `s`** échantillonnées
+   dans la cellule. Exiger `N ≥ m` ; sinon `ValueError` (`"fpc N=… is smaller than the m=… sampled
+   units in stratum …"`).
+4. Une colonne qui mélange des valeurs `≤ 1` et des valeurs `> 1` est **ambiguë** → `ValueError`,
+   jamais de devinette par ligne. (C'est le seul point où cette spécification est plus stricte que
+   R `survey`, délibérément.)
+5. Degré sans `fpc` déclaré : `f = 0`.
+
+`f` est matérialisé une fois pour toutes dans `fraction_column(s)`, constant par cellule.
+
+#### Formule de variance multi-degrés (normative)
+
+Notations, pour un estimand donné et un contexte donné (un `k`, un domaine ou un sous-groupe) :
+
+- `u_i` : valeur d'influence de la ligne `i` (déjà produite par `linearization.py`) ;
+- pour une unité `v` d'un degré quelconque, `u_v = Σ_{i ∈ v} u_i` (l'influence est additive :
+  c'est ce qui autorise tout l'effondrement hiérarchique du §7) ;
+- une **cellule** `h` du degré `s` est une valeur de `stratum_column(s)` ; elle contient
+  `m_h` unités échantillonnées du degré `s`, de moyenne d'influence `ū_h` ;
+- `f_h` est la fraction de sondage de cette cellule.
+
+Contribution d'une cellule :
+
+```
+V_s(h) = m_h / (m_h - 1) * Σ_{v ∈ h} (u_v - ū_h)²             si m_h >= 2
+V_s(h) = traitée par lonely_psu (§14.4c)                       si m_h == 1
+```
+
+Variance totale, par récurrence descendante sur les degrés (`S` = nombre de degrés) :
+
+```
+V = Σ_{h ∈ degré 1} [ (1 - f_h) * V_1(h) ]
+  + Σ_{h ∈ degré 1} [ f_h * Σ_{v ∈ h} W_2(v) ]
+
+W_s(v) = Σ_{g ∈ degré s, g ⊂ v} [ (1 - f_g) * V_s(g) + f_g * Σ_{v' ∈ g} W_{s+1}(v') ]
+W_{S+1}(·) = 0
+```
+
+Autrement dit : le terme du degré `s` est multiplié par le produit `Π_{t < s} f_t` des fractions
+de sondage rencontrées sur le chemin, et par `(1 − f_s)` pour son propre degré.
+
+**Trois conséquences à vérifier explicitement en test** :
+
+1. `S = 1` sans `fpc` → `V = Σ_h m_h/(m_h−1) Σ_c (u_hc − ū_h)²` : **exactement**
+   `variance.taylor_variance` telle qu'elle est livrée. Le nouveau chemin doit reproduire
+   l'ancien au bit près sur les mêmes données.
+2. `f_1 = 0` (aucune FPC au degré 1) annule **tous** les degrés inférieurs : on retombe sur
+   l'estimateur *ultimate cluster*. C'est la raison pour laquelle un plan à plusieurs degrés sans
+   FPC déclarée n'a pas besoin des degrés inférieurs — et c'est aussi le comportement de R
+   `survey`.
+3. `f_1 = 1` (recensement des PSU dans la strate) annule le terme du degré 1 et ne garde que les
+   degrés inférieurs.
+
+#### Degrés de liberté
+
+Inchangés : `df = #PSU(degré 1) − #strates(degré 1)`, comptés — comme aujourd'hui — sur les
+grappes et strates qui contiennent des observations du domaine. **Les degrés inférieurs
+n'ajoutent aucun degré de liberté.** `DesignDegrees` n'est pas modifié.
+
+#### Mécanique d'implémentation
+
+1. `linearization.cluster_sums` accepte déjà `group_columns` : l'appeler avec la clé la plus fine
+   `(stratum_1, psu_1, stratum_2, psu_2, …, stratum_S, psu_S)`. C'est le seul passage sur toutes
+   les lignes.
+2. `linearization.cluster_influence` donne `u` au degré le plus fin.
+3. Remonter par `group_by(...).agg(pl.col(key).sum())` successifs : degré `S` → `S−1` → … → 1.
+   Chaque niveau est strictement plus petit que le précédent (§7).
+4. `variance.py` : nouvelle fonction
+
+```python
+def multistage_variance(
+    influence: pl.DataFrame,
+    keys: tuple[str, ...],
+    fractions: pl.DataFrame,
+    *,
+    depth: int,
+    lonely_psu: str = "fail",
+) -> dict[str, float]:
+```
+
+   et un point d'entrée unique appelé par `estimation._context_rows` :
+
+```python
+def design_variance(
+    influence: pl.DataFrame,
+    keys: tuple[str, ...],
+    degrees: DesignDegrees,
+    design: SurveyDesign,
+) -> dict[str, float]:
+```
+
+   qui aiguille vers `taylor_variance` (un degré, pas de FPC, pas de PPS — chemin rapide
+   inchangé) ou vers `multistage_variance`. `taylor_variance` **garde sa signature actuelle** :
+   `tests/test_linearization.py` et `tests/test_estimation.py` l'utilisent.
+
+#### Tests obligatoires (`tests/test_multistage.py`)
+
+1. Non-régression : `stages=[Stage(id="psu", strata="h")]` donne **exactement** le même résultat
+   que `SurveyDesign(strata="h", psu="psu")` (égalité à `1e-15`, pas une tolérance lâche).
+2. `fpc` en fraction et `fpc` en effectif donnant le même `f` produisent la même variance.
+3. Deux degrés sans FPC = un degré (ultimate cluster).
+4. Exemple à deux degrés calculé à la main et écrit en dur dans le test : 2 strates × 2 PSU ×
+   2 SSU, `f_1 = 0.5`, `f_2 = 0.25`, valeurs d'influence choisies rondes ; vérifier la variance
+   terme à terme.
+5. `f_1 = 1` : seul le degré 2 contribue.
+6. Erreurs : `fpc` non constant dans une cellule ; `fpc` mélangeant `≤ 1` et `> 1` ; `N < m` ;
+   `stages=` avec `psu=` ; `stages=[]`.
+7. Domaine et `over=` sur un plan à deux degrés : la décomposabilité `Σφˡ·M0ˡ = M0` reste vraie.
+
+---
+
+### 14.4b — PPS (probabilités inégales)
+
+**Fichiers** : créer `src/afmpi/pps.py` ; modifier `survey_design.py` (champ `pps=`, déjà déclaré
+en 4a), `deprivation.py` (validation et matérialisation de π), `variance.py` ; créer
+`tests/test_pps.py`.
+
+#### Objet
+
+```python
+@dataclass(frozen=True, slots=True)
+class PPSDesign:
+    """Unequal-probability sampling at the first stage (PLAN.md §6, §14.4b)."""
+
+    method: str = "with_replacement"        # "with_replacement" | "without_replacement"
+    inclusion_probability: str | None = None
+    joint_probability: pl.DataFrame | pd.DataFrame | None = field(default=None, compare=False)
+    variance: str = "auto"                  # "auto" | "hajek" | "sen_yates_grundy"
+```
+
+- `joint_probability` est une **table en forme longue**, pas une colonne de `df` ni une matrice
+  dense : colonnes `psu_a` (str), `psu_b` (str), `pi_ab` (float). Les identifiants sont ceux de
+  la colonne `Stage.id` du degré 1 **avant** emboîtement. Une seule orientation suffit
+  (`(a, b)` implique `(b, a)`) ; les doublons contradictoires sont une `ValueError`.
+- `method="without_replacement"` **exige** `inclusion_probability`.
+- `variance="auto"` → `"sen_yates_grundy"` si `joint_probability` est fourni, `"hajek"` sinon.
+- Contraintes, chacune une `ValueError` explicite : PPS s'applique au **degré 1 seulement** (un
+  plan à plusieurs degrés avec `pps=` est refusé — hors périmètre, dit tel quel dans le message) ;
+  `pps=` avec un `fpc` déclaré au degré 1 est refusé (π porte déjà l'information de population
+  finie) ; π doit être numérique, sans valeur manquante, `0 < π ≤ 1`, et **constante à
+  l'intérieur de chaque PSU**.
+
+#### Ce que PPS change — et ce qu'il ne change pas
+
+Les poids restent ceux déclarés dans `weights=`. `inclusion_probability` n'entre **que** dans la
+variance. Les estimateurs ponctuels sont inchangés — un point à écrire dans le docstring, parce
+que c'est contre-intuitif et que le confondre est l'erreur classique.
+
+#### Les trois estimateurs
+
+Soit, dans une strate `h`, les `m_h` PSU échantillonnées, `t_c = u_hc` l'influence totale de la
+PSU `c` (déjà dilatée par les poids), `π_c` sa probabilité d'inclusion de premier ordre.
+
+**1. `with_replacement` (Hansen-Hurwitz).** Aucune formule nouvelle : c'est exactement
+l'estimateur *ultimate cluster* déjà livré,
+
+```
+V = Σ_h m_h/(m_h - 1) * Σ_c (t_c - t̄_h)²
+```
+
+parce que l'influence contient déjà `n_i = 1/π_i`. `PPSDesign(method="with_replacement")` est donc
+purement déclaratif : il valide π s'il est fourni et n'altère aucun calcul. **C'est un fait à
+documenter, pas un raccourci** : un plan PPS avec remise est déjà correctement traité par
+`v0.2.0`.
+
+**2. `sen_yates_grundy` (exact, exige les probabilités conjointes).** Par strate, puis somme sur
+les strates :
+
+```
+V_h = -½ * Σ_{c ≠ d} [ (π_cd - π_c·π_d) / π_cd ] * (t_c - t_d)²
+```
+
+La somme porte sur les paires ordonnées `c ≠ d` de PSU de la strate (le facteur `−½` en tient
+compte). Exiger `π_cd > 0` pour toute paire échantillonnée ; une paire manquante dans la table
+est une `ValueError` qui nomme la paire. C'est l'estimateur de référence pour un plan de taille
+fixe ; c'est aussi le seul dont on peut exiger une concordance à `1e-9` avec R `survey`
+(`pps = ppsmat(...)`).
+
+**3. `hajek` (approximation, quand seul π est disponible).** Approximation de Hájek (1964) pour
+un plan πPS de taille fixe, par strate :
+
+```
+t̄* = Σ_d (1 - π_d)·t_d / Σ_d (1 - π_d)
+V_h = m_h/(m_h - 1) * Σ_c (1 - π_c) * (t_c - t̄*)²
+```
+
+Si `Σ_d (1 − π_d) = 0` (toutes les PSU de la strate sont certaines, `π = 1`), la strate contribue
+`0` et n'est pas traitée comme un cas d'erreur.
+
+**Statut de validation, à écrire dans le docstring et dans le `CHANGELOG.md`** : la formule
+ci-dessus est **normative pour `afmpi`**. La comparaison à R `survey` avec `pps="brewer"` est un
+test **indicatif à tolérance documentée** (de l'ordre de quelques pour cent sur la SE) et non un
+test d'égalité : Brewer et Hájek sont deux approximations différentes de la même quantité et ne
+peuvent pas coïncider. Ne pas « corriger » `afmpi` pour faire converger ce test ; documenter
+l'écart chiffré, comme le fait `svy` (§12.A).
+
+#### Degrés de liberté et PSU isolé
+
+`df = #PSU − #strates`, inchangé. Une strate à PSU unique suit `lonely_psu` (§14.4c) sous PPS
+comme ailleurs — avec une exception naturelle : si `π_c = 1` pour cette unique PSU, elle est
+*certaine* et sa contribution est `0` quelle que soit la politique (à tester).
+
+#### Tests obligatoires (`tests/test_pps.py`)
+
+1. `with_replacement` produit **exactement** le résultat de `v0.2.0` sans `pps=`.
+2. Sen-Yates-Grundy sur un plan à 2 PSU par strate calculé à la main, valeurs en dur.
+3. Sen-Yates-Grundy avec `π_cd = π_c·π_d` (indépendance) donne une variance nulle terme à terme —
+   contrôle de cohérence de la formule.
+4. Hájek avec tous les `π` égaux à `m/M` redonne, à la FPC près, l'estimateur stratifié classique.
+5. Toutes les erreurs listées ci-dessus, une par test.
+
+---
+
+### 14.4c — PSU isolé : les cinq comportements
+
+**Fichiers** : modifier `variance.py` (le seul endroit où la politique s'applique) ; créer
+`tests/test_lonely_psu.py`.
+
+#### Définition d'une strate isolée (reprise du code livré, à ne pas changer)
+
+Dans un contexte donné (un `k`, un domaine ou un sous-groupe), une strate est **isolée** si elle
+est *utilisée* — au moins une de ses grappes contient une observation du domaine — et si le
+nombre de grappes **du plan** qu'elle contient est `< 2`. C'est ce que `variance.design_degrees`
+calcule déjà (`sizes.filter(used & (m < 2))`). Le comptage porte sur les grappes du plan, pas sur
+celles qui ont des observations du domaine : c'est la convention de `survey`, et c'est ce qui
+rend un domaine étroit estimable tant que son plan sous-jacent ne l'est pas.
+
+**Conséquence importante : la politique s'applique par contexte.** Une strate peut être isolée
+pour un sous-groupe et pas pour un autre, dans le même appel. C'est la raison pour laquelle
+`"fail"` **n'a pas le droit de lever une exception** : une seule sous-préfecture mal dotée ne doit
+pas faire échouer un tableau de 442 lignes.
+
+#### Les cinq politiques (`lonely_psu=`, défaut `"fail"`)
+
+Notations : `u_h1` l'influence de l'unique grappe de la strate isolée `h` ; `ū_all` la moyenne des
+influences par grappe sur **tout** le plan du contexte (toutes strates confondues) ;
+`H₂` l'ensemble des strates utilisées ayant `m ≥ 2`.
+
+| `lonely_psu` | Contribution de la strate isolée | Effet sur `degf()` |
+|---|---|---|
+| `"fail"` *(défaut)* | aucune : la variance du contexte entier vaut `nan` | `df` calculé normalement, mais toutes les SE sont `nan` |
+| `"certainty"` | `0` — la grappe est traitée comme auto-représentative | la strate et sa grappe sont **exclues** des deux comptages : `df` inchangé par elle |
+| `"adjust"` | `(u_h1 − ū_all)²`, **sans** le facteur `m/(m−1)` (indéfini pour `m = 1`) | la strate compte 1 grappe et 1 strate : contribution nette `0` au `df` |
+| `"average"` | `(1/\|H₂\|) · Σ_{h'∈H₂} V(h')`, calculée **par estimand** | comme `"adjust"` |
+| `"collapse"` | les strates isolées sont fusionnées avant tout calcul (règle ci-dessous) | `df` calculé sur la stratification **fusionnée**, donc plus grand |
+
+Précisions qui ne doivent pas être laissées au jugement :
+
+- `"fail"` **ne lève pas d'exception** — il émet un `LonelyPSUWarning` (nouvelle classe, sous-classe
+  de `UserWarning`, définie dans `variance.py`) nommant les strates fautives et le contexte, et
+  renvoie `nan` pour tous les estimands du contexte. C'est **exactement le comportement livré en
+  `v0.2.0`**, plus l'avertissement ; le nom `"fail"` est repris de R `survey` pour la
+  familiarité, et **la divergence avec R (qui, lui, lève) doit être écrite dans le docstring et
+  dans le README** : `afmpi` estime beaucoup de contextes en un appel, R en estime un seul.
+- `"average"` avec `H₂` vide (toutes les strates utilisées sont isolées) retombe sur `"fail"`,
+  avec un avertissement disant que c'est ce qui s'est passé.
+- **Règle de fusion déterministe de `"collapse"`** — l'ordre alphabétique des clés de strate est
+  la seule référence, pour que le résultat soit reproductible : (1) toutes les strates isolées du
+  contexte sont réunies en une seule strate portant la clé `"__afmpi_collapsed"` ; (2) si cette
+  strate fusionnée contient encore `< 2` grappes, elle est jointe à la strate de `H₂` dont la clé
+  est la plus petite en ordre lexicographique ; (3) si `H₂` est vide, retomber sur `"fail"` avec
+  un avertissement. Ne jamais fusionner « avec la strate voisine » au sens géographique :
+  `afmpi` ne connaît aucune géographie.
+- Après application de la politique, `DesignDegrees` est **recalculé** sur la stratification
+  éventuellement fusionnée, et si `df < 1` la variance vaut `nan` quelle que soit la politique
+  (ligne « `df < 1` » du tableau §14.0.D).
+
+#### Ordre des opérations dans `variance.py`
+
+```
+influence par grappe  ──►  application de lonely_psu (peut modifier la stratification)
+                      ──►  recalcul de DesignDegrees
+                      ──►  formule de variance (§14.4a ou §14.4b)
+```
+
+#### Tests obligatoires (`tests/test_lonely_psu.py`)
+
+1. Un jeu de données à 3 strates dont une isolée, les cinq politiques dans le même test, avec les
+   cinq variances attendues écrites en dur (calculables à la main sur 5 grappes).
+2. `"fail"` renvoie `nan` **et** émet exactement un `LonelyPSUWarning` (`pytest.warns`).
+3. `"certainty"` donne la même variance que le même jeu de données **privé** de la strate isolée,
+   et le même `df`.
+4. `"collapse"` sur deux strates isolées donne le même `df` qu'un plan où l'utilisateur les aurait
+   fusionnées lui-même en amont.
+5. `"average"` avec `H₂` vide → repli sur `"fail"` + avertissement.
+6. Isolement *induit par un domaine* : une strate non isolée nationalement le devient pour un
+   sous-groupe → seules les lignes de ce sous-groupe sont affectées, les autres restent chiffrées.
+7. Non-régression : sans strate isolée, les cinq politiques donnent le même résultat, identique à
+   `v0.2.0`.
+
+---
+
+### 14.5a — `ReplicateDesign` : JK1 et JKn
+
+**Fichiers** : créer `src/afmpi/design_base.py`, `src/afmpi/replicate_design.py`,
+`src/afmpi/replicate_estimation.py`, `tests/test_replicate_estimation.py` ; modifier
+`survey_design.py`, `deprivation.py`, `estimation.py`, `results.py`, `__init__.py`.
+
+#### Socle commun aux familles de design
+
+Créer `design_base.py` :
+
+```python
+class Design(abc.ABC):
+    """What every design family must expose, whatever its variance path."""
+
+    variance_path: ClassVar[str]              # "taylor" | "replication" | "census"
+
+    @property
+    @abc.abstractmethod
+    def required_columns(self) -> tuple[str, ...]: ...
+
+    @property
+    @abc.abstractmethod
+    def design_columns(self) -> tuple[str, ...]: ...
+```
+
+`SurveyDesign` (`variance_path = "taylor"`), `ReplicateDesign` (`"replication"`) et
+`CensusDesign` (`"census"`, phase 9) en héritent. `deprivation.build` remplace son
+`isinstance(design, SurveyDesign)` par `isinstance(design, Design)` ; le message d'erreur devient
+`"design must be a SurveyDesign, ReplicateDesign, CensusDesign or None"`. Tous les tests livrés
+doivent rester verts après ce changement de base.
+
+#### Objet
+
+```python
+@dataclass(frozen=True, slots=True)
+class ReplicateDesign(Design):
+    """Replicate-weight design: the estimand is re-evaluated, never linearized."""
+
+    weights: str | None = None
+    household_size: str | None = None
+    replicate_weights: tuple[str, ...] | None = None
+    method: str = "JKn"
+    strata: str | None = None
+    psu: str | None = None
+    fay: float | None = None
+    scale: float | None = None
+    rscales: tuple[float, ...] | None = None
+    combined_weights: bool = True
+    mse: bool = True
+    replicates: int | None = None      # phases 5b/5c, nombre de réplicats à générer
+    seed: int = 0                      # phase 5c, bootstrap uniquement
+    degf: int | None = None            # surcharge explicite des degrés de liberté
+```
+
+`method` ∈ `{"JK1", "JKn", "BRR", "Fay_BRR", "bootstrap", "SDR"}`. Phase 5a n'implémente que
+`"JK1"` et `"JKn"` ; les autres lèvent `NotImplementedError` avec le numéro de phase dans le
+message, jamais un silence.
+
+Validation : `replicate_weights` fourni **ou** (`psu` fourni, pour pouvoir générer les poids) ;
+`fay` uniquement avec `Fay_BRR`, dans `[0, 1)` ; `rscales`, si fourni, de longueur `R` ;
+`replicate_weights` sans doublon et disjoint de `weights`/`household_size`/`strata`/`psu`.
+
+#### Formule de variance de réplicat (normative, commune aux six méthodes)
+
+C'est **la** formule que toute la famille réplication utilise ; `scale` et `rscales` y entrent
+ici, et nulle part ailleurs :
+
+```
+θ̂_c = θ̂                         si mse = True   (autour de l'estimation ponctuelle)
+θ̂_c = (1/R) Σ_r θ̂⁽ʳ⁾            si mse = False  (autour de la moyenne des réplicats)
+
+V̂(θ̂) = scale · Σ_{r=1..R} rscales_r · (θ̂⁽ʳ⁾ - θ̂_c)²
+```
+
+et, pour la matrice complète (phase 7) :
+
+```
+V̂ = scale · Σ_r rscales_r · (θ̂⁽ʳ⁾ - θ̂_c)(θ̂⁽ʳ⁾ - θ̂_c)ᵀ
+```
+
+Si un seul `θ̂⁽ʳ⁾` est indéfini (dénominateur nul dans ce réplicat), `V̂` vaut `nan` pour cet
+estimand — voir la dernière ligne du tableau §14.0.D. Ne pas écarter le réplicat.
+
+#### Valeurs par défaut de `scale` et `rscales` par méthode
+
+Elles ne s'appliquent **que** si l'utilisateur ne les a pas fournies ; un `scale` ou un `rscales`
+explicite l'emporte toujours (c'est le cas d'usage du §14.5c : lire un fichier institutionnel).
+
+| `method` | `scale` par défaut | `rscales_r` par défaut |
+|---|---|---|
+| `JK1` | `(R − 1) / R` | `1` |
+| `JKn` | `1` | `(m_h − 1) / m_h` pour le réplicat qui retire une PSU de la strate `h` |
+| `BRR` | `1 / R` | `1` |
+| `Fay_BRR` | `1 / (R · (1 − ρ)²)` avec `ρ = fay` | `1` |
+| `bootstrap` | `1 / R` | `1` |
+| `SDR` | `4 / R` | `1` |
+
+#### Génération des poids quand `replicate_weights` est absent
+
+Ordre **déterministe et normatif** : strates triées par ordre lexicographique croissant de leur
+clé ; à l'intérieur d'une strate, PSU triées de même. Le réplicat `r` est indexé dans cet ordre.
+Sans cette règle, deux exécutions ne donneraient pas les mêmes colonnes.
+
+**JK1** (une seule strate, toutes les PSU confondues, `m` PSU au total, `R = m`) — le réplicat `r`
+retire la `r`-ième PSU :
+
+```
+w_i⁽ʳ⁾ = 0                       si i appartient à la PSU r
+w_i⁽ʳ⁾ = w_i · m / (m - 1)       sinon
+scale = (m - 1) / m,  rscales = 1
+```
+
+**JKn** (stratifié, `R = Σ_h m_h`) — le réplicat qui retire la PSU `c` de la strate `h` :
+
+```
+w_i⁽ʳ⁾ = 0                          si i ∈ PSU c
+w_i⁽ʳ⁾ = w_i · m_h / (m_h - 1)      si i ∈ strate h, autre PSU
+w_i⁽ʳ⁾ = w_i                        si i ∉ strate h
+rscales_r = (m_h - 1) / m_h,  scale = 1
+```
+
+Exiger `m_h ≥ 2` pour toute strate : sinon `ValueError` nommant la strate (le jackknife n'a pas
+d'équivalent des cinq politiques du §14.4c — c'est une limite, à écrire dans le docstring).
+
+#### Poids combinés ou non
+
+- `combined_weights=True` (défaut) : les colonnes de `replicate_weights` **sont** les poids
+  `w_i⁽ʳ⁾`, poids de base inclus.
+- `combined_weights=False` : ce sont des **facteurs** ; `w_i⁽ʳ⁾ = w_i × repwgt_ir`.
+
+Dans les deux cas, le poids de population effectif du réplicat est
+`n_i⁽ʳ⁾ = w_i⁽ʳ⁾ × household_size_i` quand `household_size` est déclaré — la même règle que pour
+le poids de base, pour que l'unité de comptage reste la personne (§4).
+
+#### Réévaluation (`replicate_estimation.py`)
+
+```python
+def replicate_weight_expressions(design: ReplicateDesign) -> list[pl.Expr]:
+    """One n_i^(r) expression per replicate, in replicate order."""
+
+def generate_replicate_weights(
+    frame: pl.DataFrame, design: ReplicateDesign
+) -> tuple[pl.DataFrame, tuple[str, ...], float, tuple[float, ...]]:
+    """Materialise the replicate weight columns, and their scale/rscales."""
+
+def replicate_totals(
+    frame: pl.DataFrame,
+    estimands: tuple[RatioEstimand, ...],
+    weights: Sequence[pl.Expr],
+    *,
+    group_column: str | None = None,
+    batch_size: int = 64,
+) -> list[tuple[RatioTotals, ...]]:
+    """Re-evaluate T(.) once per replicate, in batches (PLAN.md §7)."""
+
+def replicate_variance(
+    point: tuple[RatioTotals, ...],
+    replicates: Sequence[tuple[RatioTotals, ...]],
+    keys: tuple[str, ...],
+    *,
+    scale: float,
+    rscales: Sequence[float],
+    mse: bool,
+) -> dict[str, float]:
+```
+
+Points d'implémentation qui ne doivent pas être devinés :
+
+- `replicate_totals` réutilise **`linearization.totals`**, qui accepte déjà une expression de
+  poids — c'est le point d'intégration avec le code existant, et la raison pour laquelle aucune
+  formule d'estimateur n'est réécrite : la réplication réévalue `T(·)`, elle ne la redéfinit pas.
+- **Lots** (`batch_size=64`) : un lot construit un seul `frame.select(...)` portant
+  `2 · |estimands| · batch_size` agrégations. Ne jamais matérialiser une colonne de poids par
+  réplicat pour les `R` réplicats à la fois (§7 : « jamais `N×R` en mémoire »). `batch_size` est
+  un paramètre de fonction, pas une option d'API publique.
+- **Sous-groupes** : tous les niveaux d'une variable `over` sont obtenus dans le **même** passage,
+  par `group_by(group_column).agg(...)` au lieu de `select(...)`. Le coût reste `O(R)` scans, pas
+  `O(R × nombre de sous-groupes)`.
+- **Domaine** : l'indicatrice de domaine multiplie chaque expression de poids de réplicat,
+  exactement comme `domain.Domain.weight()` le fait pour le poids de base. Aucune ligne n'est
+  jamais filtrée.
+
+#### Degrés de liberté en réplication
+
+`DesignDegrees` est réutilisé tel quel, avec une lecture différente de ses champs, à documenter
+dans son docstring : `psus` reçoit `R` (le nombre de réplicats), `strata` reçoit le nombre de
+strates de variance, `lonely_strata` vaut `0`.
+
+| `method` | `df` |
+|---|---|
+| `JK1` | `R − 1` |
+| `JKn` | `R − H`, `H` = nombre de strates (déclarées ou reconstituées à la génération) ; `R − 1` si les strates sont inconnues (poids fournis sans `strata=`) |
+| `BRR`, `Fay_BRR`, `bootstrap`, `SDR` | `R − 1` |
+| n'importe laquelle, avec `degf=` fourni | la valeur fournie, qui l'emporte toujours |
+
+`degf=` existe parce qu'un fichier institutionnel documente souvent son propre `df` : c'est
+exactement le genre d'écart invisible que le §6 veut rendre explicite.
+
+#### Intégration dans `estimation.py`
+
+`_context_rows` est scindé, sans changer ce qu'il produit :
+
+```python
+@dataclass(frozen=True, slots=True)
+class VarianceReport:
+    values: dict[str, float]     # variance par clé d'estimand
+    degrees: DesignDegrees
+    population: float
+    observations: int
+```
+
+- `_taylor_report(...)` : le corps actuel (sommes par grappe → influence → `design_variance`) ;
+- `_replicate_report(...)` : totaux ponctuels → `replicate_totals` → `replicate_variance` ;
+- `_census_report(...)` : phase 9 ;
+- `_context_rows(...)` reçoit un `VarianceReport` et construit les lignes du tableau — **cette
+  partie est commune aux trois familles et ne doit exister qu'une fois** (c'est le « point de
+  convergence » du §5 : l'interface est partagée, pas le calcul de variance).
+
+#### Tests obligatoires (`tests/test_replicate_estimation.py`)
+
+1. Sur un plan stratifié en grappes, `ReplicateDesign(method="JKn", strata=…, psu=…)` avec poids
+   générés donne une variance **égale à `taylor_variance`** pour `H` et `M0` (identité exacte du
+   jackknife stratifié et de la linéarisation pour une moyenne pondérée) et **proche** pour `A`
+   (tolérance relative `1e-6`, à documenter : le jackknife n'est pas exactement la linéarisation
+   pour un ratio).
+2. Poids de réplicat fournis en dur, variance calculée à la main, égalité à `1e-12`.
+3. `mse=True` et `mse=False` donnent des valeurs différentes et toutes deux conformes à la
+   formule écrite en dur dans le test.
+4. `combined_weights=False` avec des facteurs `= w⁽ʳ⁾/w` redonne exactement le résultat de
+   `combined_weights=True`.
+5. `batch_size=1`, `batch_size=7` et `batch_size=1000` donnent des résultats identiques au bit
+   près : le lotissement est une optimisation, pas une approximation.
+6. `over=` sur un design de réplication : la décomposabilité tient et le nombre de scans reste
+   `O(R)` (vérifié par un compteur d'appels sur une fonction espionnée, pas par chronométrage).
+7. `m_h = 1` en `JKn` → `ValueError` nommant la strate.
+8. Un `θ̂⁽ʳ⁾` indéfini (réplicat où plus personne n'est pauvre) → variance `nan`, pas `0`.
+
+---
+
+### 14.5b — `ReplicateDesign` : BRR et Fay BRR
+
+**Fichiers** : créer `src/afmpi/hadamard.py` ; modifier `replicate_design.py`,
+`replicate_estimation.py` ; créer `tests/test_hadamard.py` et étendre
+`tests/test_replicate_estimation.py`.
+
+#### Construction de la matrice de Hadamard — normative
+
+**Construction de Sylvester uniquement.** C'est un choix explicite : elle n'existe que pour les
+ordres puissances de 2, ce qui donne parfois plus de réplicats que le minimum théorique, mais
+elle est constructive, exacte, tient en quinze lignes et ne demande aucune table pré-calculée ni
+arithmétique de corps finis (contrairement à Paley). Le surcoût est au plus un facteur 2 sur `R`,
+c'est-à-dire sur le temps de calcul, jamais sur la justesse.
+
+```python
+def sylvester(order: int) -> pl.DataFrame:
+    """Hadamard matrix of order 2**k, entries +1/-1, first row and column all +1."""
+```
+
+```
+H(1)  = [1]
+H(2n) = [[H(n),  H(n)],
+         [H(n), -H(n)]]
+```
+
+Ordre retenu : `R = 2**ceil(log2(H + 1))`, où `H` est le nombre de strates de variance. Exiger
+`R ≥ 4`. La première colonne (constante `+1`) est **écartée** ; les colonnes `2 … H+1` sont
+affectées aux strates dans l'ordre lexicographique croissant de leur clé.
+
+#### Poids de réplicat BRR
+
+Chaque strate doit contenir **exactement 2 PSU** ; sinon `ValueError` nommant la strate et son
+nombre de PSU (BRR n'est défini que pour un plan en demi-échantillons). Les deux PSU sont
+ordonnées par ordre lexicographique croissant de leur clé : indice `1` et indice `2`.
+
+Pour le réplicat `r` et la strate `h`, soit `δ_rh ∈ {+1, −1}` l'entrée de la matrice :
+
+```
+BRR      : w_i⁽ʳ⁾ = 2·w_i   si la PSU de i est celle sélectionnée par δ_rh, 0 sinon
+Fay BRR  : w_i⁽ʳ⁾ = (2 - ρ)·w_i  si sélectionnée,  ρ·w_i  sinon,   ρ = fay ∈ [0, 1)
+```
+
+Convention de sélection : `δ_rh = +1` sélectionne la PSU d'indice 1, `δ_rh = −1` celle d'indice 2.
+
+`scale` : `1/R` pour BRR, `1/(R·(1−ρ)²)` pour Fay BRR — la première étant le cas `ρ = 0` de la
+seconde, ce qui doit être vrai dans le code comme dans le test.
+
+`df` : `R − 1` (§14.5a).
+
+#### Tests obligatoires
+
+1. `sylvester(n) @ sylvester(n).T == n · I` pour `n ∈ {2, 4, 8, 16, 32}`.
+2. Première ligne et première colonne toutes à `+1`.
+3. Ordre choisi : `H = 3` → `R = 4` ; `H = 4` → `R = 8` ; `H = 7` → `R = 8` ; `H = 8` → `R = 16`.
+4. `Fay_BRR(fay=0.0)` donne **exactement** `BRR` (au bit près).
+5. Sur un plan à `H` strates × 2 PSU, BRR et la linéarisation donnent la même variance pour `M0`
+   à `1e-10` (propriété classique : BRR est exact pour un total pondéré sur ce plan).
+6. Une strate à 1 ou 3 PSU → `ValueError` nommant la strate.
+
+---
+
+### 14.5c — `ReplicateDesign` : bootstrap, SDR, et le cahier des charges enrichi
+
+**Fichiers** : modifier `replicate_design.py`, `replicate_estimation.py`, `pyproject.toml`
+(ajout de `numpy>=1.24`) ; étendre `tests/test_replicate_estimation.py`.
+
+#### Bootstrap rééchelonné de Rao-Wu-Yue
+
+Défaut `replicates = 200` si `replicates is None` ; exiger `R ≥ 2`.
+
+Pour chaque réplicat `r` et chaque strate `h` de `m_h` PSU : tirer `m_h − 1` PSU **avec remise**
+parmi les `m_h`, et noter `t_hc⁽ʳ⁾` le nombre de fois où la PSU `c` est tirée. Alors
+
+```
+w_i⁽ʳ⁾ = w_i · (m_h / (m_h - 1)) · t_hc⁽ʳ⁾        pour i dans la PSU c de la strate h
+scale = 1 / R,  rscales = 1
+```
+
+(C'est la forme du bootstrap de Rao-Wu-Yue avec `m_h′ = m_h − 1`, où le facteur de
+rééchelonnement `√(m_h′/(m_h−1))` vaut 1 et disparaît. Écrire cette justification dans le
+docstring, sinon la formule paraît arbitraire.) Exiger `m_h ≥ 2`.
+
+**Déterminisme** — sans cette règle, deux exécutions donnent des SE différentes : un seul
+`numpy.random.default_rng(design.seed)` est créé, et les tirages sont consommés dans l'ordre
+`pour r = 1..R : pour h dans les strates triées par ordre lexicographique croissant`. Le
+`seed` par défaut est `0` : `afmpi` ne produit **jamais** de résultat non reproductible sans que
+l'utilisateur l'ait demandé.
+
+#### SDR (successive difference replication)
+
+`R` = ordre de Sylvester tel que `R ≥ 4` et `R ≥ (nombre de PSU) + 1`, même construction qu'en
+5b. Les PSU sont rangées dans l'ordre lexicographique croissant de `(clé de strate, clé de PSU)`
+et reçoivent un rang `j = 1, 2, …, m`. Avec `a_{r,j}` l'entrée de la matrice de Hadamard à la
+ligne `r` et à la colonne `((j − 1) mod R) + 1` :
+
+```
+w_i⁽ʳ⁾ = w_i · [ 1 + 2^(-3/2) · (a_{r,j} - a_{r,j+1}) ]      pour i dans la PSU de rang j
+scale = 4 / R,  rscales = 1
+```
+
+où `j + 1` est pris modulo le nombre de colonnes (la dernière PSU est appariée à la première).
+Référence de validation : la documentation méthodologique de l'American Community Survey, seule
+source publique pour cette méthode ; l'écart constaté doit être chiffré dans le `CHANGELOG.md`,
+pas résumé par « validé ».
+
+#### Cahier des charges enrichi : lire un fichier institutionnel
+
+C'est ici que `scale`, `rscales`, `combined_weights` et `mse` prennent tout leur sens. **Règle de
+précédence, normative** :
+
+1. Un `scale` ou un `rscales` fourni par l'utilisateur l'emporte **toujours** sur la valeur par
+   défaut de la méthode (tableau §14.5a) — y compris lorsque `replicate_weights` est généré.
+2. `rscales`, si fourni, doit avoir exactement `R` éléments ; sinon `ValueError` donnant les deux
+   longueurs.
+3. `mse` n'a pas de valeur par défaut dépendant de la méthode : `True` partout, parce que c'est la
+   convention des fichiers publics les plus répandus. `mse=False` doit être demandé.
+4. `degf=` l'emporte sur toute règle de `df`.
+5. Aucun de ces paramètres ne modifie les estimateurs ponctuels — uniquement la variance.
+
+À documenter dans le README : un tableau à quatre lignes montrant comment déclarer un fichier
+DHS (poids fournis, `combined_weights=True`), un fichier ACS (`SDR`, `scale=4/80`), un fichier
+avec `rscales` hétérogènes, et un fichier en `Fay_BRR(fay=0.3)`.
+
+#### Tests obligatoires
+
+1. Même `seed` → colonnes de poids identiques au bit près ; `seed` différent → colonnes
+   différentes ; jamais d'appel à `numpy.random` global.
+2. Bootstrap avec `R = 2000` sur un petit plan converge vers la variance de linéarisation à `2 %`
+   relatif (test marqué `@pytest.mark.slow`).
+3. `scale`/`rscales` explicites l'emportent : le même jeu de réplicats avec `scale=2·défaut` donne
+   exactement le double de variance.
+4. `rscales` de mauvaise longueur → `ValueError` donnant les deux longueurs.
+5. SDR : la somme des facteurs de poids sur les réplicats vaut `R` par PSU (contrôle de
+   cohérence de la construction).
+
+---
+
+### 14.6a — Évolution dans le temps : échantillons indépendants
+
+**Fichiers** : créer `src/afmpi/change_over_time.py`, `tests/test_change_over_time.py` ;
+modifier `estimation.py`, `results.py`.
+
+#### Paramètres
+
+- `tvar` : nom de la colonne identifiant la vague. Doit contenir **au moins 2** valeurs
+  distinctes, sans valeur manquante (même exigence que pour une variable `over`, et pour la même
+  raison) ; sinon `ValueError`.
+- `cot_year` : nom d'une colonne donnant l'année civile de la vague, **constante à l'intérieur de
+  chaque vague** (validé ; sinon `ValueError`). Si `None`, la durée entre deux vagues consécutives
+  vaut `1` et les mesures annualisées coïncident avec les mesures brutes.
+- `cot_year` sans `tvar` → `ValueError`.
+
+#### Ce qui est estimé
+
+Les vagues sont estimées comme des **domaines** sur la table complète — pas par des appels
+séparés, et surtout pas en filtrant les lignes. Puis, pour chaque estimand, chaque `k`, chaque
+sous-groupe `over`, et chaque paire de vagues `(t₀, t₁)` avec `t₀ < t₁` dans l'ordre trié des
+valeurs de `tvar` :
+
+- **toutes les paires consécutives**, et
+- **la paire (première, dernière)** quand il y a plus de deux vagues (et seulement alors, pour ne
+  pas la produire deux fois).
+
+Quatre quantités, avec `d = année(t₁) − année(t₀)` (`d = 1` si `cot_year is None`) :
+
+```
+abs      Δ     = θ̂₁ - θ̂₀
+rel      Δ_r   = (θ̂₁ - θ̂₀) / θ̂₀
+ann_abs  Δ_a   = (θ̂₁ - θ̂₀) / d
+ann_rel  Δ_ar  = (θ̂₁ / θ̂₀)^(1/d) - 1
+```
+
+`ann_rel` est la forme en croissance composée, celle de `mpitb` ; l'écrire ainsi et pas en
+différence de logarithmes. Si `θ̂₀ = 0` ou `θ̂₀` est indéfini, `rel` et `ann_rel` valent `None`
+avec une SE `nan` (jamais une division par zéro, jamais un `inf`).
+
+#### Variance du changement — l'idée centrale, à ne pas contourner
+
+`Var(Δ) = Var(θ̂₁) + Var(θ̂₀) − 2·Cov(θ̂₁, θ̂₀)`. **Ne pas implémenter cette formule terme à
+terme.** Implémenter ceci à la place :
+
+> la valeur d'influence de la différence est la différence des valeurs d'influence,
+> `u_i^Δ = u_i^{(t₁)} − u_i^{(t₀)}`, et la variance de `Δ` est celle que la machinerie de variance
+> déjà écrite (§14.4a) calcule sur `u^Δ`.
+
+Deux raisons de faire ainsi, à écrire dans le docstring du module :
+
+1. C'est **exact**, pas approché : le terme de covariance apparaît tout seul, avec le bon signe et
+   la bonne valeur, parce que deux vagues qui partagent une grappe voient leurs influences
+   s'additionner dans la même grappe.
+2. C'est ce qui rend la **phase 6b presque gratuite** : quand les vagues sont indépendantes, les
+   supports de `u^{(t₁)}` et `u^{(t₀)}` sont disjoints et la covariance vaut zéro d'elle-même ;
+   quand elles se recouvrent, la même ligne de code donne la bonne covariance. Aucune formule
+   nouvelle n'est nécessaire en 6b.
+
+Pour un `ReplicateDesign`, l'équivalent est : `Δ⁽ʳ⁾ = θ̂₁⁽ʳ⁾ − θ̂₀⁽ʳ⁾`, puis la formule de variance
+de réplicat du §14.5a appliquée aux `Δ⁽ʳ⁾`.
+
+Pour les quantités relatives, **méthode delta**, avec `V₁ = Var(θ̂₁)`, `V₀ = Var(θ̂₀)` et
+`C = Cov(θ̂₁, θ̂₀)` obtenus par la même machinerie (`C` se déduit de
+`C = (V₁ + V₀ − Var(Δ)) / 2`) :
+
+```
+Var(Δ_r)  = V₁/θ̂₀² + θ̂₁²·V₀/θ̂₀⁴ - 2·θ̂₁·C/θ̂₀³
+Var(Δ_a)  = Var(Δ) / d²
+Var(Δ_ar) = ( (1/d)·(θ̂₁/θ̂₀)^(1/d) )² · ( V₁/θ̂₁² + V₀/θ̂₀² - 2·C/(θ̂₁·θ̂₀) )
+```
+
+Degrés de liberté du changement : ceux du **plan complet** (les deux vagues réunies), pas ceux
+d'une vague. IC : même `ci_method`/`level` que le reste de l'appel, mais **`bounded=False`** — un
+changement peut être négatif, le bornage à `[0, 1]` n'a aucun sens ici, et `ci_method="logit"` est
+silencieusement remplacé par `"t"` pour les lignes de changement (à documenter dans le docstring
+et dans le README, c'est le genre de détail qui produirait sinon des intervalles absurdes).
+
+#### Sortie
+
+Une **table séparée**, exposée par une nouvelle méthode, sans toucher à `_ESTIMATE_SCHEMA` :
+
+```python
+def changes(self):
+    """Absolute, relative and annualised changes between waves."""
+```
+
+Colonnes, dans cet ordre : `measure, indicator, dimension, weight, k, over, subgroup, t0, t1,
+years, type, est, se, lci, uci, df` — avec `type ∈ {"abs", "rel", "ann_abs", "ann_rel"}`. Comme
+partout ailleurs, la famille de la table suit celle de l'entrée (`_convert`). Appeler `changes()`
+sur un résultat estimé sans `tvar` lève `ValueError` (« no time variable was declared »).
+
+#### Tests obligatoires
+
+1. Deux vagues **disjointes** (aucune grappe commune) : `Var(Δ) = V₁ + V₀` à `1e-12`.
+2. `d = 1` → `ann_abs == abs` et `ann_rel == rel`, exactement.
+3. Trois vagues → paires produites : `(1,2)`, `(2,3)` et `(1,3)`, exactement, sans doublon.
+4. `θ̂₀ = 0` → `rel` et `ann_rel` valent `None`, SE `nan`, pas d'exception.
+5. `cot_year` non constant dans une vague → `ValueError`.
+6. `changes()` sans `tvar` → `ValueError`.
+7. Un IC de changement peut être négatif (non tronqué à `[0, 1]`).
+
+---
+
+### 14.6b — Panels et échantillons chevauchants
+
+**Fichiers** : modifier `change_over_time.py`, `estimation.py` ; créer `tests/test_panel.py`.
+
+Grâce au choix d'implémentation du §14.6a, **cette phase n'ajoute aucune formule de variance**.
+Elle ajoute la *détection* du recouvrement, sa *validation* et son *signalement*.
+
+#### Paramètres
+
+- `overlap ∈ {"auto", "independent", "panel"}`, défaut `"auto"`.
+- `panel_id` : colonne identifiant l'unité suivie (ménage ou individu), optionnelle.
+
+#### Détection
+
+Il y a **recouvrement** si l'une des deux conditions est vraie :
+
+1. au moins une clé de PSU emboîtée (`psu_column(1)`) apparaît dans plus d'une vague ; ou
+2. `panel_id` est fourni et au moins une de ses valeurs apparaît dans plus d'une vague.
+
+Comportement selon `overlap` :
+
+| `overlap` | Recouvrement détecté | Pas de recouvrement |
+|---|---|---|
+| `"auto"` | covariance calculée ; **entrée obligatoire dans `diagnostics()`** disant que le régime « panel » a été retenu et pourquoi | covariance nulle de fait ; entrée disant que le régime « indépendant » a été retenu |
+| `"independent"` | covariance **forcée à zéro** — les deux vagues sont estimées sur des identifiants de PSU rendus distincts par préfixage de la vague ; entrée dans `diagnostics()` disant que du recouvrement a été détecté et délibérément ignoré | identique |
+| `"panel"` | covariance calculée | `ValueError` : `"overlap='panel' was requested but no unit is shared between waves"` |
+
+Le §6 exige que traiter la covariance comme nulle soit « explicite, pas le comportement par
+défaut silencieux ». C'est satisfait ainsi : `"auto"` ne l'ignore jamais quand elle existe, et le
+régime retenu est **toujours** consigné et lisible.
+
+#### Nouvelle méthode de `EstimationResult`
+
+```python
+def diagnostics(self):
+    """Design decisions taken during estimation, one row each."""
+```
+
+Colonnes : `topic, context, decision, detail`. Renseignée par : le régime temporel (6b), la
+politique de PSU isolé effectivement déclenchée et sur quelles strates (4c), le repli d'IC logit
+sur une borne (§14.0.D), et le rapport de valeurs manquantes (8). C'est le pendant lisible des
+avertissements : un utilisateur qui lance 442 sous-préfectures ne lira pas 442 `warnings`, il
+lira une table.
+
+#### Contraintes de conception à valider explicitement
+
+- Pour qu'une covariance de panel soit captée, la **même clé de PSU** doit désigner la même
+  grappe dans les deux vagues. Si `panel_id` est fourni mais qu'aucune clé de PSU n'est commune,
+  émettre un avertissement disant que les identifiants de grappe ne sont pas comparables entre
+  vagues et que la covariance sera sous-estimée. Ne pas ré-identifier les grappes d'office :
+  ce serait deviner.
+- Pour un `ReplicateDesign`, la covariance n'est correcte que si les **mêmes colonnes** de poids
+  de réplicat, la même méthode et le même `R` valent pour les deux vagues. Le valider et lever une
+  `ValueError` sinon.
+- `panel_id` est aussi utilisé pour un diagnostic chiffré : la proportion d'unités présentes dans
+  les deux vagues (« taux d'appariement »), consignée dans `diagnostics()`.
+
+#### Tests obligatoires
+
+1. Panel parfait (mêmes ménages, mêmes grappes, mesures fortement corrélées) : `Var(Δ)` est
+   **strictement inférieure** à `V₁ + V₀`, et l'écart vaut `2·C` avec `C` calculé à la main.
+2. Corrélation négative construite → `Var(Δ) > V₁ + V₀` (le signe de la covariance est bien géré).
+3. `overlap="independent"` sur un vrai panel redonne exactement `V₁ + V₀`, et `diagnostics()`
+   contient la ligne disant que le recouvrement a été ignoré.
+4. `overlap="panel"` sans recouvrement → `ValueError`.
+5. `overlap="auto"` sans recouvrement → régime « indépendant » consigné, résultat identique au
+   §14.6a.
+6. Réplication : colonnes de réplicat divergentes entre vagues → `ValueError`.
+
+---
+
+### 14.7 — VCOV complète et tests d'hypothèses
+
+**Fichiers** : modifier `variance.py`, `linearization.py`, `replicate_estimation.py`,
+`results.py`, `estimation.py` ; créer `src/afmpi/testing.py`, `tests/test_vcov.py`,
+`tests/test_hypothesis.py`.
+
+#### VCOV
+
+Formules — les mêmes que pour la variance, avec un produit extérieur à la place du carré :
+
+```
+Taylor       V = Σ_h m_h/(m_h - 1) · Σ_c (u_hc - ū_h)(u_hc - ū_h)ᵀ     (+ les termes de degré
+                                                                          inférieur du §14.4a)
+Réplication  V = scale · Σ_r rscales_r · (θ̂⁽ʳ⁾ - θ̂_c)(θ̂⁽ʳ⁾ - θ̂_c)ᵀ
+Recensement  V = 0
+```
+
+La diagonale de `V` doit être **exactement** le vecteur de variances déjà produit par les phases
+précédentes : c'est le premier test à écrire, et c'est ce qui garantit qu'on n'a pas deux chemins
+de calcul divergents.
+
+```python
+def vcov(self, *, k=None, over=None, subgroup=None, measures=None):
+    """Full variance-covariance matrix of one estimation context."""
+```
+
+- Le **contexte** est `(k, over, subgroup)`. Défaut : le contexte national (`over=None`) du seul
+  `k` estimé. Si plusieurs `k` ont été estimés et que `k` n'est pas donné → `ValueError` listant
+  les `k` disponibles ; ne jamais en choisir un.
+- `measures` : séquence de clés d'estimand (`"H"`, `"A"`, `"M0"`, `"hd::i0"`, `"pctb_dim::sante"`,
+  …). Défaut : `("H", "A", "M0")` — la matrice complète de tous les estimands d'une spécification
+  à 17 indicateurs fait 74 × 74 et n'est presque jamais ce qu'on veut par défaut.
+- Sortie : table carrée avec une première colonne `term` (chaîne) puis une colonne par terme, dans
+  l'ordre de `measures`. Famille de sortie suivant l'entrée, comme partout.
+- Symétrie forcée : renvoyer `(V + Vᵀ)/2` pour que l'égalité `V[i,j] == V[j,i]` soit vraie au bit
+  près malgré l'ordre de sommation.
+
+#### Tests d'hypothèses
+
+```python
+@dataclass(frozen=True, slots=True)
+class HypothesisTest:
+    terms: tuple[str, ...]
+    estimate: float          # L·θ̂ (scalaire si q == 1, sinon nan)
+    se: float                # sqrt(L·V·Lᵀ) si q == 1, sinon nan
+    statistic: float
+    df1: int                 # q, le rang du contraste
+    df2: int                 # les degrés de liberté du plan
+    p_value: float
+    method: str              # "Wald"
+    dist: str                # "F" | "chisq"
+```
+
+```python
+def test(self, a, b=None, *, measure="M0", k=None, dist="F"):
+    """Wald test of a contrast between two domains, subgroups or periods."""
+```
+
+- `a` et `b` désignent chacun soit une expression de domaine (`"region == 'Abidjan'"`), soit un
+  couple `(over, subgroup)`. `b=None` teste `θ_a = 0`.
+- Contraste : `L·θ̂ − c` avec, pour le cas à deux termes, `L = (+1, −1)` et `c = 0`.
+- Statistique de Wald :
+
+```
+W = (L·θ̂ - c)ᵀ · (L·V·Lᵀ)⁻¹ · (L·θ̂ - c)
+dist="F"      : W/q ~ F(q, df)      (défaut — la convention de `survey`, plus prudente)
+dist="chisq"  : W    ~ χ²(q)
+```
+
+- Cas `q = 1` (le cas courant) : reporter aussi `estimate = θ̂_a − θ̂_b`,
+  `se = sqrt(V_aa + V_bb − 2·V_ab)`, et `p_value` bilatérale issue d'un Student à `df` degrés de
+  liberté — **cohérente** avec la statistique `F` (`t² = F` pour `q = 1`), ce qui doit être
+  vérifié en test.
+- **La covariance `V_ab` doit être calculée, jamais supposée nulle.** Deux sous-groupes du même
+  échantillon ne sont pas indépendants ; les traiter comme tels est exactement l'erreur que le §6
+  reproche à un package « qui donne seulement les bons estimateurs ponctuels ». Mécanique : les
+  deux domaines sont deux indicatrices sur la même table, leurs influences sont deux colonnes de
+  la même table de grappes, et `V_ab` sort de la même formule que `V_aa`.
+- `df` : celui du plan complet (§14.4a/§14.5a), pas celui d'un domaine. Si `df < 1`,
+  `p_value = nan` et `statistic = nan` — pas de test inventé.
+- `__str__` lisible en une ligne, façon `summary()`.
+
+#### Règle normative des degrés de liberté, par cas
+
+Ce tableau est la « règle documentée et testée par cas » demandée au §6. Il doit être recopié
+dans le docstring de `DesignDegrees` et testé ligne par ligne.
+
+| Cas | `df` |
+|---|---|
+| Plan à un degré, stratifié ou non | `#PSU − #strates`, comptés sur les grappes/strates *utilisées* par le domaine |
+| Plan à plusieurs degrés | identique — **seul le degré 1 compte** |
+| Domaine ou sous-groupe | identique : les grappes du plan comptent, même vides sur le domaine |
+| Strate isolée, `lonely_psu="certainty"` | la strate et sa grappe sont retirées des deux comptages |
+| Strate isolée, `"adjust"`/`"average"` | comptées normalement (contribution nette nulle) |
+| Strate isolée, `"collapse"` | comptées sur la stratification fusionnée |
+| PPS | inchangé |
+| Réplication | voir le tableau du §14.5a |
+| Recensement | `df = 0`, aucun intervalle |
+| Changement dans le temps | `df` du plan des deux vagues réunies |
+| `degf=` fourni | la valeur fournie, dans tous les cas |
+
+#### Tests obligatoires
+
+1. `diag(vcov())` est **exactement** `se()**2` pour les trois familles de design.
+2. `V` est symétrique et semi-définie positive (toutes les valeurs propres `≥ −1e-12`).
+3. `test(a, b)` entre deux sous-groupes : la statistique reproduit une valeur calculée à la main,
+   et `t² == F` à `1e-12`.
+4. Un test contre lui-même (`a == b`) donne `estimate = 0`, `statistic = 0`, `p_value = 1`.
+5. Ignorer `V_ab` (calculé à part dans le test) donnerait une SE différente : le test l'affirme
+   explicitement, pour verrouiller le fait que la covariance est bien prise en compte.
+6. Le tableau des `df` ci-dessus, une ligne par test.
+
+---
+
+### 14.8 — Politiques de valeurs manquantes configurables
+
+**Fichiers** : créer `src/afmpi/missing.py`, `tests/test_missing.py` ; modifier
+`deprivation.py`, `specification.py`, `results.py`.
+
+#### Déplacement du code existant
+
+`deprivation._apply_missing_policy` est **déplacé** dans `missing.py` sans changer son
+comportement pour les deux politiques déjà livrées, et devient :
+
+```python
+def apply(frame: pl.DataFrame, spec: Specification) -> tuple[pl.DataFrame, MissingReport]:
+    """Add g_ij, the observation flags, w_j*g_ij and c_i, per the policy."""
+```
+
+`deprivation.build` l'appelle. C'est un refactoring à faire **en premier, avec les 104 tests
+verts avant d'ajouter quoi que ce soit**.
+
+#### Les trois politiques
+
+`Specification.missing_policy` accepte désormais trois valeurs (`_MISSING_POLICIES` passe de deux
+à trois) plus un appelable :
+
+| Politique | `g_ij` si manquant | Poids utilisé | `observed_ij` | Ligne conservée |
+|---|---|---|---|---|
+| `"listwise_deletion"` *(défaut, livré)* | — | `w_j` | — | non, la ligne est retirée si un indicateur manque |
+| `"reweighting"` *(livré)* | `0` | `w_j / Σ_{j observé} w_j` | `0` | oui, si au moins un indicateur est observé |
+| `"treat_as_nondeprived"` *(nouveau)* | `0` | `w_j` (inchangé) | `1` | oui, toujours |
+
+`"treat_as_nondeprived"` est la convention de `PythonIPM` (un manquant après application du seuil
+est lu comme « non privé »). Le §4 exige explicitement qu'elle soit **une politique parmi
+d'autres, pas le comportement par défaut** : elle est donc disponible mais n'est pas le défaut.
+Différence à documenter avec `"reweighting"` : `"reweighting"` renormalise pour que `c_i` reste
+comparable et exclut l'indicateur du dénominateur de `hd`/`hdk` (`observed = 0`) ;
+`"treat_as_nondeprived"` biaise `c_i` vers le bas et garde l'indicateur au dénominateur.
+
+**Politique personnalisée** : `missing_policy` peut être un appelable
+
+```python
+Callable[[pl.DataFrame, Specification], pl.DataFrame]
+```
+
+qui reçoit la table validée et doit renvoyer une table contenant, pour chaque indicateur d'indice
+`j`, les colonnes `deprived_column(j)`, `observed_column(j)` et `contribution_column(j)`. `afmpi`
+valide ensuite le résultat : colonnes présentes, `g ∈ {0, 1}`, `observed ∈ {0, 1}`,
+`c_i = Σ_j contribution_j ∈ [0, 1]` — et lève une `ValueError` détaillée sinon. `c_i` est
+toujours recalculé par `afmpi`, jamais lu depuis la table renvoyée.
+
+#### Rapport
+
+```python
+@dataclass(frozen=True, slots=True)
+class MissingReport:
+    policy: str
+    rows_in: int
+    rows_out: int
+    dropped: int
+    per_indicator: pl.DataFrame     # indicator, missing, missing_share
+```
+
+Exposé par `EstimationResult.missing_report()` et résumé dans `diagnostics()` (§14.6b).
+`observations` et `excluded_observations`, déjà présents sur `EstimationResult`, ne changent pas
+de sens.
+
+#### Tests obligatoires
+
+1. Non-régression : les deux politiques livrées donnent, après le déplacement dans `missing.py`,
+   des résultats identiques au bit près.
+2. Sans aucune valeur manquante, les **trois** politiques donnent le même résultat.
+3. Cas construit à la main où les trois politiques donnent trois `c_i` différents, valeurs en dur.
+4. `"reweighting"` : une ligne dont tous les indicateurs manquent est retirée (poids observé nul).
+5. `"treat_as_nondeprived"` : aucune ligne n'est retirée, `excluded_observations == 0`.
+6. Appelable renvoyant des colonnes incomplètes ou un `c_i > 1` → `ValueError`.
+7. `missing_report()` compte correctement les manquants par indicateur.
+
+---
+
+### 14.9 — Performance, streaming parquet et `CensusDesign`
+
+**Fichiers** : créer `src/afmpi/backend.py`, `src/afmpi/io.py`, `src/afmpi/census_design.py`,
+`benchmarks/generate_census.py`, `benchmarks/pandas_naive.py`,
+`tests/test_performance_scale.py`, `tests/test_census.py` ; modifier `deprivation.py`,
+`linearization.py`, `estimation.py`.
+
+#### `CensusDesign`
+
+```python
+@dataclass(frozen=True, slots=True)
+class CensusDesign(Design):
+    """The rows are the whole population: there is no sampling error to estimate."""
+
+    weights: str | None = None
+    household_size: str | None = None
+```
+
+`variance_path = "census"`. Comportement normatif, à écrire tel quel :
+
+- **aucun `group_by` par grappe ou par strate n'est exécuté** — c'est le point du §7 (« un mode
+  dédié, pas `SurveyDesign` avec un design dégénéré à un seul PSU géant ») et c'est aussi ce qui
+  le rend plus rapide ;
+- `se = 0.0`, `lci = uci = est`, `cv = 0.0`, `df = 0`, `psus = 0`, `strata = 0` ;
+- `vcov()` renvoie une matrice de zéros ;
+- `test()` lève une `ValueError` : sans variance d'échantillonnage, un test de Wald n'a pas de
+  sens. Message : `"a census has no sampling variance; a Wald test is not defined"` ;
+- `ci_method` est ignoré (documenté), `check_decomposability` fonctionne normalement.
+
+#### Ingestion (`backend.py`)
+
+`deprivation._to_polars` est déplacé ici et étendu :
+
+```python
+InputKind = Literal["pandas", "polars", "polars-lazy", "parquet"]
+
+def to_frame(df) -> tuple[pl.DataFrame | pl.LazyFrame, InputKind]:
+```
+
+Règle de conversion de sortie (`EstimationResult._convert`) : `pandas` → pandas ; tout le reste →
+polars. Un `LazyFrame` en entrée ne change pas la famille de sortie (polars) ; il change le
+moment de l'exécution.
+
+#### E/S parquet (`io.py`)
+
+```python
+def from_parquet(path, *, streaming=True, columns=None) -> ParquetSource
+def to_parquet(frame, path, *, compression="zstd") -> None
+def to_stata(frame, path) -> None      # export uniquement, via pandas
+```
+
+`ParquetSource` porte une unique méthode `estimate(spec, design, **kwargs)` qui accepte les mêmes
+paramètres que `afmpi.estimate` et applique la **projection** : seules les colonnes réellement
+nécessaires sont lues — indicateurs de `spec`, `design.required_columns`,
+`design.design_columns`, variables `over`, colonnes citées par `domain`, `tvar`, `cot_year`,
+`panel_id`. La liste des colonnes projetées est consignée dans `diagnostics()` : c'est la preuve
+vérifiable que le *projection pushdown* a bien eu lieu, et c'est testable sans chronomètre.
+
+#### Chemin paresseux en deux passages
+
+Conforme au §7, et déjà à moitié en place grâce à l'identité par grappe de `linearization.py` :
+
+```
+Passage 1  scan.select(agrégations des estimands).collect()        → Y et X globaux
+Passage 2  scan.group_by(clés de plan).agg(...).collect()          → sommes par grappe
+           puis cluster_influence(...) sur la petite table         → variance
+```
+
+Ajouter à `linearization.py` la version paresseuse, **sans dupliquer la logique** (les deux
+versions partagent les mêmes constructeurs d'expressions) :
+
+```python
+def cluster_sums_lazy(lf, estimands, weight=None, group_columns=(STRATUM, PSU)) -> pl.LazyFrame
+def totals_lazy(lf, estimands, weight=None) -> pl.LazyFrame
+```
+
+`estimate(..., lazy=True)` renvoie un `LazyEstimation` portant `.collect() -> EstimationResult`.
+`LazyEstimation` ne fait **aucune** validation coûteuse à la construction : c'est tout son intérêt.
+
+#### Jeu de données de référence (`benchmarks/generate_census.py`)
+
+Dimensions figées, pour que les chiffres publiés soient comparables d'une exécution à l'autre :
+**10 000 000 individus**, **30 indicateurs**, **500 districts de dénombrement** (PSU),
+**33 régions**, **108 départements**, **442 sous-préfectures**, générateur
+`numpy.random.default_rng(20260830)`, écriture en parquet compressé `zstd`. Aucune donnée réelle.
+
+#### Ce qui est mesuré et la cible chiffrée
+
+Charge : (a) chargement, (b) H/A/M0 national, (c) les trois désagrégations (33, 108, 442),
+(d) contributions par indicateur, (e) robustesse à 8 seuils `k`.
+
+**Cible normative** : (b)-(e) en **moins de 300 secondes** et **moins de 8 Go** de pic mémoire
+résident sur une machine de bureau ordinaire. C'est la traduction chiffrée du « quelques minutes,
+quelques Go » du §7, qui fait foi (§13.A.6) ; le « moins de 30 s / moins de 2 Go » du §10 est
+l'estimation antérieure d'`agy`, conservée pour l'exactitude historique du compte rendu mais
+**non normative**.
+
+Le test correspondant est marqué `@pytest.mark.slow` et **exclu de l'exécution par défaut** :
+ajouter à `pyproject.toml`
+
+```toml
+addopts = "-ra -m 'not slow'"
+markers = ["slow: benchmarks and long-running convergence checks", "optional: needs an external reference file"]
+```
+
+Une version réduite (100 000 lignes, mêmes désagrégations) tourne, elle, à chaque commit, pour
+attraper une régression de complexité sans coûter deux minutes de CI.
+
+`benchmarks/pandas_naive.py` rejoue (b)-(e) en pandas pur, traduction directe de la logique de
+`PythonIPM/pipeline/05_indices_ipm.py`, sans optimisation. Le rapport de gain mesuré (« N fois
+plus rapide », « M fois moins de mémoire ») va dans le `README.md` **avec la date, la machine et
+les versions** — un chiffre sans son contexte n'est pas une mesure.
+
+#### Tests obligatoires
+
+1. `CensusDesign` : `se == 0.0` partout, `lci == uci == est`, `df == 0`, `test()` lève.
+2. `CensusDesign` et `SurveyDesign` sans grappes donnent les **mêmes estimateurs ponctuels**.
+3. `lazy=True` puis `.collect()` donne un résultat identique au bit près à `lazy=False`.
+4. `from_parquet` : la liste de colonnes consignée dans `diagnostics()` est exactement la liste
+   nécessaire, et pas une de plus.
+5. Un parquet à 100 000 lignes et 200 colonnes donne le même résultat que la même table chargée
+   en mémoire.
+6. Benchmark réduit en CI ; benchmark complet marqué `slow`.
+
+---
+
+### 14.10 — Suite de conformité statistique
+
+**Fichiers** : créer `tests/test_conformity/` (un module par famille de design),
+`tests/test_conformity/reference/*.json`, `tools/reference/*.R`, `tools/reference/*.do`.
+
+#### Principe, tranché ici : aucune dépendance à R ni à Stata au moment du test
+
+Les valeurs de référence sont **produites hors ligne**, une fois, par les scripts de
+`tools/reference/`, puis **figées en JSON dans le dépôt**. La CI ne fait que comparer. Les
+scripts sont commités pour que la référence soit reproductible et auditable, mais ils ne sont
+jamais exécutés par `pytest`. Cela rend la phase 10 réalisable sans licence Stata et sans R en
+CI — ce qui est la seule façon de tenir le §8 en pratique.
+
+#### Format d'un fichier de référence
+
+```json
+{
+  "design": "stratified_cluster_fpc",
+  "generator": "tests/test_conformity/generate.py::stratified_cluster_fpc",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.4-2",
+  "reference_script": "tools/reference/stratified_cluster_fpc.R",
+  "produced_on": "2026-08-30",
+  "tolerance": { "est": 1e-9, "se": 1e-7, "df": 0 },
+  "values": [
+    { "measure": "M0", "k": 0.3333333333333333, "over": null, "subgroup": null,
+      "est": 0.3141592653, "se": 0.0071234567, "df": 42 }
+  ]
+}
+```
+
+`tolerance` est **par fichier**, avec une ligne de commentaire dans le script R expliquant
+pourquoi elle vaut ce qu'elle vaut (§8 : « la tolérance dépend du design testé et doit être
+justifiée, pas arbitraire »). Tolérances attendues : `1e-9` pour tout ce qui est exact
+(linéarisation, jackknife, BRR, Sen-Yates-Grundy), `1e-7` pour les SE mettant en jeu une racine
+carrée et une accumulation, et une tolérance **relative** documentée, de l'ordre du pour cent,
+pour les seules comparaisons d'approximations différentes (Hájek contre Brewer, §14.4b).
+
+#### Jeux de données synthétiques déterministes
+
+Un module unique `tests/test_conformity/generate.py` avec une fonction par design, chacune
+produisant un `pl.DataFrame` reproductible à partir d'une graine écrite dans le fichier JSON. Les
+mêmes fonctions sont appelées par les scripts R via un export CSV commité, pour que R et `afmpi`
+voient **exactement** les mêmes données.
+
+#### Couverture obligatoire (tableau §8.A, rendu exécutable)
+
+| Fichier | Design |
+|---|---|
+| `test_srs.py` | SRS, SRS stratifié |
+| `test_cluster.py` | un degré en grappes, stratifié en grappes |
+| `test_multistage_conformity.py` | deux degrés, FPC à chaque degré |
+| `test_pps_conformity.py` | PPS avec et sans remise, avec et sans probabilités conjointes |
+| `test_lonely_conformity.py` | strate à PSU unique, les cinq politiques |
+| `test_domains.py` | domaines, y compris traversant les strates ; très petits domaines |
+| `test_af_limits.py` | zéro pauvre, tout le monde pauvre, `k = 0`, `k = 1` |
+| `test_data_limits.py` | poids extrêmes (rapport `1:10⁶`), valeurs manquantes selon les trois politiques |
+| `test_replication_conformity.py` | JK1, JKn, BRR, Fay BRR, bootstrap, SDR |
+| `test_overlap_conformity.py` | panels et échantillons chevauchants |
+
+Chaque fichier compare `est`, `se` **et** `df` — le §8 insiste : deux logiciels peuvent
+s'accorder sur `M0` et diverger sur la SE, et deux logiciels peuvent s'accorder sur les deux et
+diverger sur l'IC par le seul `df`.
+
+La comparaison à `mpitb` (Stata) est marquée `@pytest.mark.optional` et ignorée proprement
+(`pytest.skip` avec un message explicite) quand le fichier de référence est absent — voir le
+point ouvert maintenu du §11.
+
+#### Invariants en CI
+
+`tests/test_invariants.py` est **étendu**, pas remplacé : les invariants déjà en place
+(`M0 = H·A`, `Σactbⱼ = M0`, `Σpctbⱼ = 1`, `Σφˡ·M0ˡ = M0`) doivent être vérifiés pour **chaque
+famille de design** ajoutée par les phases 4a-9, y compris `CensusDesign` et chaque méthode de
+réplication. Un nouvel invariant s'ajoute : `Σ_d pctb_dim_d = 1` et
+`Σ_{j ∈ d} pctbⱼ = pctb_dim_d`.
+
+---
+
+### 14.11 — Packaging, documentation, intégration continue
+
+**Fichiers** : créer `CHANGELOG.md`, `.github/workflows/tests.yml`, `docs/quickstart.md` ;
+modifier `README.md`, `pyproject.toml`.
+
+1. **`CHANGELOG.md`** au format *Keep a Changelog* (`Added` / `Changed` / `Fixed` / `Deprecated`),
+   une entrée par version, la plus récente en haut, rétro-alimenté pour `v0.1.0` et `v0.2.0`.
+   Discipline reprise de `svy` (§12.A) : **tout écart numérique constaté face à une référence est
+   chiffré** dans l'entrée, jamais résumé par « corrigé ».
+2. **`README.md`** — ajouts obligatoires, chacun réclamé par une section antérieure :
+   - la convention des seuils `k` **en fractions et non en pourcentages**, avec la correspondance
+     `mpitb` (`c(20, 33)` → `k=[0.20, 0.33]`) — §12.B.4 ;
+   - un tableau des trois familles de design et de quand utiliser chacune ;
+   - la note sur `lonely_psu="fail"` qui **ne lève pas** d'exception, contrairement à R `survey` ;
+   - le tableau de lecture d'un fichier de poids de réplicat institutionnel (§14.5c) ;
+   - le chiffre de gain de performance mesuré, avec sa date, sa machine et ses versions (§14.9) ;
+   - l'attribution : Alkire & Foster (2011), Suppa (2023) pour `mpitb`, Lumley pour `survey`.
+3. **CI** — `.github/workflows/tests.yml` : matrice Python 3.10 / 3.11 / 3.12 sur
+   `ubuntu-latest`, plus un travail `windows-latest` en 3.12 (c'est la plateforme de
+   développement) ; étapes `pip install -e .[test]`, `ruff check`, `pytest`. Les tests marqués
+   `slow` ne tournent que sur la branche `main` et sur les tags.
+4. **Lint** — `ruff` ajouté à l'extra `test`, configuré dans `pyproject.toml` :
+   `line-length = 96`, `target-version = "py310"`, règles `["E", "F", "I", "UP", "B"]`. Corriger
+   le code existant si nécessaire ; ne pas désactiver une règle pour éviter de corriger.
+5. **`docs/quickstart.md`** : le chemin le plus court du DataFrame au tableau de résultats, en
+   moins d'une page, plus un exemple par famille de design.
+6. **`afmpi[report]`** (§12.C) reste **hors périmètre** : ne pas créer cet extra.
+
+---
+
+### 14.12 — Republication
+
+1. Version : `pyproject.toml` **et** `afmpi.__version__` mis à jour ensemble (ils sont déjà
+   synchronisés à `0.2.0` — un test de cohérence entre les deux serait bienvenu dans
+   `test_specification.py` ou un `test_packaging.py`).
+2. Numérotation : `0.3.0` si les phases 4a-6b sont livrées, `0.4.0` en ajoutant 7-9, `1.0.0`
+   seulement une fois la suite de conformité (phase 10) verte sur **toutes** les familles de
+   design — pas avant, parce que `1.0.0` est un engagement de stabilité d'API et que c'est
+   précisément le reproche fait à `svy` au §12.A.
+3. Publication : `git tag -a vX.Y.Z`, `git push origin main --tags` sur `cae-ins/afmpi`, qui
+   **existe déjà** — aucune création de dépôt, jamais.
+4. **PyPI reste un jalon distinct**, sur confirmation explicite de l'utilisateur à chaque
+   publication (§3 : « pas un blanc-seing permanent »). Ne pas publier sur PyPI de sa propre
+   initiative, même si toutes les phases sont vertes.
+
+---
+
+### 14.13 — Ce qui reste ouvert après cette passe
+
+Un seul point, et il ne peut pas être tranché par un agent :
+
+- **Jeux de données `mpitb` de référence publiquement rejouables** (§11). Dépend d'une
+  disponibilité externe et éventuellement d'une licence Stata. §14.10 le contourne : la suite de
+  conformité repose sur des jeux synthétiques et des références figées, la comparaison à `mpitb`
+  est optionnelle et sautée si le fichier manque. **Aucune phase n'est bloquée par ce point.**
+
+Tout le reste des points ouverts antérieurs a été tranché : API objets vs fonctionnelle (§6),
+méthodes namespacées (§12.C), noms français vs anglais (§12.C), adaptateur `vecteur_z` (§11),
+`backend=` et `missing=` sur `estimate()` (§14.0.C), tolérances de conformité (§14.10), cible de
+performance chiffrée (§14.9), construction de la matrice de Hadamard (§14.5b), règle de fusion de
+`"collapse"` (§14.4c), interprétation du `fpc` (§14.4a), estimateur PPS par défaut (§14.4b) et
+règle des degrés de liberté par cas (§14.7).
