@@ -1,10 +1,9 @@
-"""Deprivation engine: raw indicators to ``g_ij`` and ``c_i`` (PLAN.md §5).
+"""Deprivation engine: raw indicators to ``g_ij`` and ``c_i`` (PLAN.md §5, §14.4a-4c).
 
-This stage knows nothing about the sampling design. It validates the indicator
-columns, applies the missing-value policy, builds the weighted deprivation score
-``c_i = sum_j(w_j * g_ij)``, and materialises the design identifiers that the
-variance stage consumes later. The same output feeds the Taylor path, and would
-feed the replication and census paths unchanged.
+This stage knows nothing about the sampling design calculations. It validates the
+indicator columns, applies the missing-value policy, builds the weighted deprivation
+score ``c_i = sum_j(w_j * g_ij)``, and materialises the design identifiers that the
+variance stage consumes later.
 """
 
 from __future__ import annotations
@@ -24,6 +23,25 @@ WEIGHT = "__afmpi_n"
 SCORE = "__afmpi_c"
 STRATUM = "__afmpi_stratum"
 PSU = "__afmpi_psu"
+PI = "__afmpi_pi"
+
+
+def stratum_column(level: int) -> str:
+    """Stratum identifier for sampling stage ``level`` (1-indexed)."""
+
+    return STRATUM if level == 1 else f"__afmpi_stratum{level}"
+
+
+def psu_column(level: int) -> str:
+    """PSU identifier for sampling stage ``level`` (1-indexed)."""
+
+    return PSU if level == 1 else f"__afmpi_psu{level}"
+
+
+def fraction_column(level: int) -> str:
+    """Sampling fraction f for sampling stage ``level`` (1-indexed)."""
+
+    return f"__afmpi_f{level}"
 
 
 def deprived_column(index: int) -> str:
@@ -117,7 +135,10 @@ def _validate_required_columns(
     design: SurveyDesign,
     extra: tuple[str, ...],
 ) -> None:
-    needed = set(indicators) | set(design.required_columns) | set(extra)
+    pps_needed = ()
+    if design.pps is not None and design.pps.inclusion_probability is not None:
+        pps_needed = (design.pps.inclusion_probability,)
+    needed = set(indicators) | set(design.required_columns) | set(extra) | set(pps_needed)
     missing = sorted(needed - set(frame.columns))
     if missing:
         raise ValueError(f"columns absent from df: {missing}")
@@ -244,28 +265,113 @@ def _apply_missing_policy(frame: pl.DataFrame, spec: Specification) -> pl.DataFr
 
 
 def _add_design_identifiers(frame: pl.DataFrame, design: SurveyDesign) -> pl.DataFrame:
-    """Materialise the stratum and PSU keys used by the Taylor variance.
+    """Materialise stratum, PSU and FPC keys across sampling stages."""
 
-    Without declared strata the whole sample is one stratum. Without declared
-    PSUs every row is its own PSU, which reproduces the with-replacement simple
-    random sampling variance -- the same convention as ``ids = ~1`` in the R
-    ``survey`` package.
-
-    PSU identifiers are read as nested inside their stratum: a design that
-    numbers its clusters ``1, 2, ...`` inside each stratum is then read
-    correctly, and a PSU can never straddle two strata. When cluster identifiers
-    are already unique across strata this nesting changes nothing.
-    """
-
-    stratum = (
-        pl.col(design.strata).cast(pl.String).fill_null("__afmpi_null__")
-        if design.strata is not None
-        else pl.lit("__afmpi_all__")
-    )
-    if design.psu is not None:
-        psu = pl.col(design.psu).cast(pl.String).fill_null("__afmpi_null__")
+    stages = design.resolved_stages
+    if len(stages) == 0:
+        stratum = (
+            pl.col(design.strata).cast(pl.String).fill_null("__afmpi_null__")
+            if design.strata is not None
+            else pl.lit("__afmpi_all__")
+        )
+        if design.psu is not None:
+            psu = pl.col(design.psu).cast(pl.String).fill_null("__afmpi_null__")
+        else:
+            psu = pl.int_range(pl.len(), dtype=pl.Int64).cast(pl.String)
+        frame = frame.with_columns(
+            stratum.alias(STRATUM),
+            (stratum + pl.lit("|") + psu).alias(PSU),
+            pl.lit(0.0).alias(fraction_column(1)),
+        )
     else:
-        psu = pl.int_range(pl.len(), dtype=pl.Int64).cast(pl.String)
-    return frame.with_columns(stratum.alias(STRATUM)).with_columns(
-        (pl.col(STRATUM) + pl.lit("|") + psu).alias(PSU)
-    )
+        for index, stage in enumerate(stages, start=1):
+            s_col = stratum_column(index)
+            p_col = psu_column(index)
+            f_col = fraction_column(index)
+
+            if index == 1:
+                stratum_expr = (
+                    pl.col(stage.strata).cast(pl.String).fill_null("__afmpi_null__")
+                    if stage.strata
+                    else pl.lit("__afmpi_all__")
+                )
+            else:
+                prev_psu = pl.col(psu_column(index - 1))
+                stratum_expr = prev_psu + pl.lit("|") + (
+                    pl.col(stage.strata).cast(pl.String).fill_null("__afmpi_null__")
+                    if stage.strata
+                    else pl.lit("")
+                )
+
+            psu_expr = stratum_expr + pl.lit("|") + pl.col(stage.id).cast(pl.String).fill_null("__afmpi_null__")
+
+            frame = frame.with_columns(
+                stratum_expr.alias(s_col),
+                psu_expr.alias(p_col),
+            )
+
+            if stage.fpc is not None:
+                grouped_fpc = frame.group_by(s_col).agg(
+                    pl.col(stage.fpc).drop_nulls().unique().alias("u_fpc")
+                )
+                non_const = grouped_fpc.filter(pl.col("u_fpc").list.len() > 1)
+                if non_const.height > 0:
+                    strat_val = non_const.row(0, named=True)[s_col]
+                    raise ValueError(
+                        f"fpc column {stage.fpc!r} is not constant within stratum {strat_val!r}"
+                    )
+
+                fpc_series = frame.select(
+                    pl.col(stage.fpc).cast(pl.Float64).drop_nulls().drop_nans()
+                ).to_series()
+                if len(fpc_series) > 0:
+                    has_le_1 = (fpc_series <= 1.0).any()
+                    has_gt_1 = (fpc_series > 1.0).any()
+                    if has_le_1 and has_gt_1:
+                        raise ValueError(f"fpc column {stage.fpc!r} mixes values <= 1 and > 1")
+                    if has_le_1:
+                        if (fpc_series < 0.0).any() or (fpc_series > 1.0).any():
+                            raise ValueError(f"sampling fraction fpc {stage.fpc!r} must be in [0, 1]")
+                        frame = frame.with_columns(
+                            pl.col(stage.fpc).cast(pl.Float64).fill_null(0.0).alias(f_col)
+                        )
+                    else:
+                        counts = frame.group_by(s_col).agg(
+                            pl.col(p_col).n_unique().alias("__m"),
+                            pl.col(stage.fpc).cast(pl.Float64).first().alias("__N"),
+                        )
+                        invalid_N = counts.filter(pl.col("__N") < pl.col("__m"))
+                        if invalid_N.height > 0:
+                            row = invalid_N.row(0, named=True)
+                            raise ValueError(
+                                f"fpc N={row['__N']} is smaller than the m={row['__m']} sampled units in stratum {row[s_col]!r}"
+                            )
+                        f_frame = counts.with_columns(
+                            (pl.col("__m").cast(pl.Float64) / pl.col("__N")).alias(f_col)
+                        ).select(s_col, f_col)
+                        frame = frame.join(f_frame, on=s_col, how="left")
+                else:
+                    frame = frame.with_columns(pl.lit(0.0).alias(f_col))
+            else:
+                frame = frame.with_columns(pl.lit(0.0).alias(f_col))
+
+    if design.pps is not None and design.pps.inclusion_probability is not None:
+        pi_name = design.pps.inclusion_probability
+        pi_col = pl.col(pi_name).cast(pl.Float64)
+        invalid = frame.select(
+            (pi_col.is_null() | pi_col.is_nan() | (pi_col <= 0) | (pi_col > 1)).any()
+        ).item()
+        if invalid:
+            raise ValueError(f"inclusion_probability column {pi_name!r} must be in (0, 1]")
+
+        grouped_pi = frame.group_by(PSU).agg(pi_col.unique().alias("u_pi"))
+        non_const = grouped_pi.filter(pl.col("u_pi").list.len() > 1)
+        if non_const.height > 0:
+            psu_val = non_const.row(0, named=True)[PSU]
+            raise ValueError(
+                f"inclusion_probability column {pi_name!r} is not constant within PSU {psu_val!r}"
+            )
+
+        frame = frame.with_columns(pi_col.alias(PI))
+
+    return frame

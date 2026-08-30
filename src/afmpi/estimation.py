@@ -1,9 +1,9 @@
-"""Alkire-Foster estimation with a design-based Taylor variance.
+"""Alkire-Foster estimation with design-based Taylor variance.
 
 The pipeline follows PLAN.md §5: the deprivation engine turns raw indicators
 into ``c_i``, the estimand compiler turns ``c_i`` into ratios, the linearization
 stage turns ratios into influence values, and only then does the design get
-involved. Nothing in this module computes a variance formula of its own.
+involved.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import polars as pl
 
 from . import deprivation, domain as domain_module, estimands as estimands_module
 from . import linearization
-from .deprivation import PSU, STRATUM, DeprivationMatrix
+from .deprivation import DeprivationMatrix
 from .results import EstimationResult
 from .specification import Specification
 from .survey_design import SurveyDesign
@@ -26,11 +26,10 @@ from .variance import (
     coefficient_of_variation,
     confidence_interval,
     design_degrees,
+    design_variance,
     standard_error,
-    taylor_variance,
 )
 
-#: Tolerance of the decomposability check ``sum_l phi_l * M0_l == M0``.
 DECOMPOSITION_TOLERANCE = 1e-9
 
 _CLUSTER_WEIGHT = "__afmpi_cluster_weight"
@@ -69,35 +68,7 @@ def estimate(
     level: float = 0.95,
     check_decomposability: bool = True,
 ) -> EstimationResult:
-    """Estimate Alkire-Foster measures with design-based standard errors.
-
-    Parameters
-    ----------
-    df:
-        One row per unit, with 0/1 or boolean deprivation indicators.
-    spec:
-        Dimensions, indicators, Alkire-Foster weights and missing-value policy.
-    design:
-        Weights, strata and PSUs. ``None`` means unweighted, one row per cluster.
-    k:
-        Poverty cutoff, or several of them for a robustness table. Cutoffs are
-        **fractions between 0 and 1**, not percentages: ``1/3``, not ``33``.
-    over:
-        One or several grouping variables. Each produces its own one-way
-        breakdown, not a cross-tabulation, and the design is preserved for every
-        subgroup (see :mod:`afmpi.domain`).
-    domain:
-        A boolean expression restricting the estimate to a subpopulation
-        *without* filtering the rows out of the design.
-    ci_method:
-        ``"logit"`` (default, bounds respected by construction, the convention
-        of ``svyciprop``), ``"t"`` or ``"normal"`` (symmetric, truncated to
-        ``[0, 1]``, the convention of ``PythonIPM``).
-    level:
-        Confidence level of the intervals.
-    check_decomposability:
-        Verify ``sum_l phi_l * M0_l == M0`` over each ``over`` variable.
-    """
+    """Estimate Alkire-Foster measures with design-based standard errors."""
 
     if design is None:
         design = SurveyDesign()
@@ -123,6 +94,19 @@ def estimate(
     )
 
 
+def _stage_group_columns(frame: pl.DataFrame, design: SurveyDesign) -> tuple[str, ...]:
+    stages = design.resolved_stages
+    depth = max(1, len(stages))
+    cols: list[str] = []
+    for level in range(1, depth + 1):
+        cols.append(deprivation.stratum_column(level))
+        cols.append(deprivation.psu_column(level))
+        cols.append(deprivation.fraction_column(level))
+    if deprivation.PI in frame.columns:
+        cols.append(deprivation.PI)
+    return tuple(cols)
+
+
 def _estimate_from_matrix(
     matrix: DeprivationMatrix,
     *,
@@ -135,6 +119,7 @@ def _estimate_from_matrix(
 ) -> EstimationResult:
     frame = matrix.frame
     spec = matrix.spec
+    design = matrix.design
 
     base = domain_module.POPULATION
     if domain is not None:
@@ -142,7 +127,8 @@ def _estimate_from_matrix(
         domain_module.validate(frame, base)
     base_weight = base.weight()
 
-    universe = frame.select(STRATUM, PSU).unique(maintain_order=True)
+    group_cols = _stage_group_columns(frame, design)
+    universe = frame.select(list(group_cols)).unique(maintain_order=True)
     subgroups = {variable: domain_module.levels(frame, variable) for variable in variables}
     rows: list[dict[str, object]] = []
     decomposition: list[dict[str, object]] = []
@@ -151,12 +137,11 @@ def _estimate_from_matrix(
         estimands = estimands_module.build(spec, cutoff)
         keys = tuple(item.key for item in estimands)
 
-        national_sums = linearization.cluster_sums(frame, estimands, base_weight)
-        # The whole estimated population -- the domain itself when one is set --
-        # is the reference row, with no ``over``/``subgroup`` label; the domain
-        # it stands for is carried by the result object instead.
+        national_sums = linearization.cluster_sums(
+            frame, estimands, base_weight, group_columns=group_cols
+        )
         national = _context_rows(
-            national_sums, estimands, keys, cutoff, None, None, ci_method, level
+            national_sums, estimands, keys, cutoff, None, None, ci_method, level, design
         )
         rows.extend(national)
         national_population = national[0]["population"] if national else 0.0
@@ -167,14 +152,14 @@ def _estimate_from_matrix(
                 frame,
                 estimands,
                 base_weight,
-                group_columns=(STRATUM, PSU, variable),
+                group_columns=group_cols + (variable,),
             )
             share_total = 0.0
             weighted_m0 = 0.0
             for subgroup in subgroups[variable]:
-                sums = _align(cells, universe, variable, subgroup)
+                sums = _align(cells, universe, variable, subgroup, group_cols)
                 subgroup_rows = _context_rows(
-                    sums, estimands, keys, cutoff, variable, subgroup, ci_method, level
+                    sums, estimands, keys, cutoff, variable, subgroup, ci_method, level, design
                 )
                 rows.extend(subgroup_rows)
                 if national_population:
@@ -233,13 +218,14 @@ def _context_rows(
     subgroup: str | None,
     ci_method: str,
     level: float,
+    design: SurveyDesign,
 ) -> list[dict[str, object]]:
     """Point estimates, variance and intervals for one (k, domain) context."""
 
     ratios = linearization.totals_from_clusters(sums, estimands)
     influence = linearization.cluster_influence(sums, ratios)
     degrees = design_degrees(influence)
-    variances = taylor_variance(influence, keys, degrees)
+    variances, degrees = design_variance(influence, keys, degrees, design)
 
     totals = sums.select(
         pl.col(_CLUSTER_WEIGHT).sum().alias("population"),
@@ -285,19 +271,15 @@ def _align(
     universe: pl.DataFrame,
     variable: str,
     subgroup: str,
+    group_columns: tuple[str, ...],
 ) -> pl.DataFrame:
-    """Restrict per-cluster sums to one level, keeping every design cluster.
-
-    Clusters with no observation in the subgroup are kept with zero sums: they
-    contribute nothing to the estimate but they still belong to their stratum,
-    which is exactly what keeps the variance right (PLAN.md §6).
-    """
+    """Restrict per-cluster sums to one level, keeping every design cluster."""
 
     selected = cells.filter(pl.col(variable).cast(pl.String) == pl.lit(subgroup)).drop(
         variable
     )
-    value_columns = [column for column in selected.columns if column not in (STRATUM, PSU)]
-    aligned = universe.join(selected, on=[STRATUM, PSU], how="left")
+    value_columns = [column for column in selected.columns if column not in group_columns]
+    aligned = universe.join(selected, on=list(group_columns), how="left")
     return aligned.with_columns(
         [pl.col(column).fill_null(0).alias(column) for column in value_columns]
     )

@@ -1,56 +1,41 @@
-"""Design-based variance, degrees of freedom and confidence intervals.
+"""Design-based variance, degrees of freedom and confidence intervals (PLAN.md §5, §14.4a-4c).
 
-This module implements the **Taylor** branch of PLAN.md §5 only: it consumes the
-linearized values produced by :mod:`afmpi.linearization` and never re-evaluates
-an estimand. The replication branch (phase 5) will produce its own variance from
-the dispersion of re-estimated replicates and share only the result interface.
-
-Variance estimator (single stage, ultimate cluster, clusters drawn with
-replacement)::
-
-    V = sum_h [ m_h / (m_h - 1) * sum_c (u_hc - mean_h(u))^2 ]
-
-where ``u_hc`` is the influence of the sample summed over cluster ``c`` of
-stratum ``h`` and ``m_h`` is the number of sampled clusters in that stratum.
-With a single stratum ``mean_h(u) = 0`` exactly, because ``sum_i u_i = 0``, and
-the formula collapses to ``m/(m-1) * sum_c u_c^2`` -- the estimator used by
-``PythonIPM/pipeline/05_indices_ipm.py::ratio_et_ic``, which is therefore
-reproduced exactly rather than approximated.
-
-Finite population corrections, several stages, PPS and the five lonely-PSU
-behaviours are deliberately out of scope here; see PLAN.md §9 phases 4a-4c.
+This module implements the Taylor branch of variance estimation: multi-stage designs,
+FPC, PPS sampling and the five lonely-PSU policies.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from math import exp, isfinite, log, nan, sqrt
-from statistics import NormalDist
+import warnings
 
 import polars as pl
 from scipy import stats
 
-from .deprivation import PSU, STRATUM
+from .deprivation import (
+    PI,
+    PSU,
+    STRATUM,
+    fraction_column,
+    psu_column,
+    stratum_column,
+)
+from .pps import normalize_joint_probability
+from .survey_design import SurveyDesign
 
 CI_METHODS = ("normal", "t", "logit")
 
 _CLUSTER_ROWS = "__afmpi_cluster_rows"
 
 
+class LonelyPSUWarning(UserWarning):
+    """Warning emitted when a stratum contains only a single PSU."""
+
+
 @dataclass(frozen=True, slots=True)
 class DesignDegrees:
-    """Degrees of freedom of one design context, kept explicit (PLAN.md §6).
-
-    ``df = psus - strata`` is *one* convention, and it is the one implemented
-    here. It is a first-class, inspectable object precisely because two
-    implementations can agree on the point estimate and the standard error and
-    still disagree on the interval through the degrees of freedom alone.
-
-    For a domain the counts are those of the clusters and strata that actually
-    contain domain observations, while the variance itself is computed over the
-    whole design -- the same rule as ``degf()`` applied to a subset design in
-    the R ``survey`` package.
-    """
+    """Degrees of freedom of one design context, kept explicit (PLAN.md §6)."""
 
     psus: int
     strata: int
@@ -69,14 +54,14 @@ def design_degrees(clusters: pl.DataFrame) -> DesignDegrees:
     """Count the clusters and strata backing one domain."""
 
     in_domain = clusters.filter(pl.col(_CLUSTER_ROWS) > 0)
-    psus = in_domain.height
-    strata = in_domain.select(pl.col(STRATUM).n_unique()).item() if psus else 0
+    psus = in_domain.select(pl.col(PSU).n_unique()).item() if in_domain.height else 0
+    strata = in_domain.select(pl.col(STRATUM).n_unique()).item() if in_domain.height else 0
     sizes = clusters.group_by(STRATUM).agg(
-        pl.len().alias("m"),
+        pl.col(PSU).n_unique().alias("m"),
         (pl.col(_CLUSTER_ROWS) > 0).any().alias("used"),
     )
     lonely = sizes.filter(pl.col("used") & (pl.col("m") < 2)).height
-    return DesignDegrees(psus=psus, strata=int(strata), lonely_strata=int(lonely))
+    return DesignDegrees(psus=int(psus), strata=int(strata), lonely_strata=int(lonely))
 
 
 def taylor_variance(
@@ -84,23 +69,11 @@ def taylor_variance(
     keys: tuple[str, ...],
     degrees: DesignDegrees,
 ) -> dict[str, float]:
-    """Variance of every linearized estimand, from the collapsed cluster table.
-
-    ``clusters`` holds one row per (stratum, PSU) with the influence value of
-    each estimand summed over the cluster, as produced by
-    :func:`afmpi.linearization.cluster_influence`.
-    """
+    """Variance of every linearized estimand, single stage ultimate cluster."""
 
     if not degrees.estimable:
-        # A stratum with a single sampled cluster leaves the variance
-        # unidentified. Reporting nothing is the honest answer; inventing a
-        # value is not. The five documented alternatives (fail, certainty,
-        # adjust, average, collapse) belong to phase 4c.
         return {key: nan for key in keys}
 
-    # An estimand whose ratio was undefined carries no influence value at all.
-    # Polars skips nulls when summing, which would quietly turn "not measurable"
-    # into a variance of zero, so those keys are answered explicitly.
     undefined = clusters.select(
         [pl.col(key).null_count().alias(key) for key in keys]
     ).row(0, named=True)
@@ -132,6 +105,330 @@ def taylor_variance(
     return variances
 
 
+def design_variance(
+    influence: pl.DataFrame,
+    keys: tuple[str, ...],
+    degrees: DesignDegrees,
+    design: SurveyDesign,
+) -> tuple[dict[str, float], DesignDegrees]:
+    """Point of entry for design variance calculation, returning variances and degrees."""
+
+    policy = design.lonely_psu
+    stages = design.resolved_stages
+    S = max(1, len(stages))
+
+    sizes = influence.group_by(STRATUM).agg(
+        pl.col(PSU).n_unique().alias("m"),
+        (pl.col(_CLUSTER_ROWS) > 0).any().alias("used"),
+    )
+    used_sizes = sizes.filter(pl.col("used"))
+    lonely_strata_keys = used_sizes.filter(pl.col("m") < 2).select(STRATUM).to_series().to_list()
+    h2_strata_keys = used_sizes.filter(pl.col("m") >= 2).select(STRATUM).to_series().to_list()
+
+    current_influence = influence
+    res_degrees = degrees
+
+    if lonely_strata_keys:
+        if policy == "fail":
+            warnings.warn(
+                f"Stratum/strata {lonely_strata_keys} contain(s) a single PSU; lonely_psu='fail'",
+                category=LonelyPSUWarning,
+                stacklevel=2,
+            )
+            return {key: nan for key in keys}, res_degrees
+
+        elif policy == "certainty":
+            # Exclude lonely strata from degrees counting
+            without_lonely = current_influence.filter(~pl.col(STRATUM).is_in(lonely_strata_keys))
+            res_degrees = design_degrees(without_lonely)
+
+        elif policy == "collapse":
+            collapsed_key = "__afmpi_collapsed"
+            cond = pl.col(STRATUM).is_in(lonely_strata_keys)
+            current_influence = current_influence.with_columns(
+                pl.when(cond).then(pl.lit(collapsed_key)).otherwise(pl.col(STRATUM)).alias(STRATUM)
+            )
+            m_collapsed = (
+                current_influence.filter(pl.col(STRATUM) == collapsed_key)
+                .select(pl.col(PSU).n_unique())
+                .item()
+            )
+            if m_collapsed < 2:
+                if h2_strata_keys:
+                    h_min = sorted(h2_strata_keys)[0]
+                    current_influence = current_influence.with_columns(
+                        pl.when(pl.col(STRATUM) == collapsed_key)
+                        .then(pl.lit(h_min))
+                        .otherwise(pl.col(STRATUM))
+                        .alias(STRATUM)
+                    )
+                else:
+                    warnings.warn(
+                        f"Collapse failed because H2 is empty; lonely_psu='fail'",
+                        category=LonelyPSUWarning,
+                        stacklevel=2,
+                    )
+                    return {key: nan for key in keys}, res_degrees
+            res_degrees = design_degrees(current_influence)
+            lonely_strata_keys = []
+
+        elif policy == "average" and not h2_strata_keys:
+            warnings.warn(
+                f"H2 is empty for lonely_psu='average'; falling back to 'fail'",
+                category=LonelyPSUWarning,
+                stacklevel=2,
+            )
+            return {key: nan for key in keys}, res_degrees
+
+    if design.pps is not None:
+        v = _pps_variance(
+            current_influence, keys, res_degrees, design, lonely_strata_keys, h2_strata_keys
+        )
+        return v, res_degrees
+
+    v = multistage_variance(
+        current_influence,
+        keys,
+        depth=S,
+        lonely_psu=policy,
+        lonely_strata_keys=lonely_strata_keys,
+        h2_strata_keys=h2_strata_keys,
+    )
+    return v, res_degrees
+
+
+def multistage_variance(
+    influence: pl.DataFrame,
+    keys: tuple[str, ...],
+    *,
+    depth: int,
+    lonely_psu: str = "fail",
+    lonely_strata_keys: list[str] | None = None,
+    h2_strata_keys: list[str] | None = None,
+) -> dict[str, float]:
+    """Variance calculation supporting multi-stage and FPC."""
+
+    if lonely_strata_keys is None:
+        sizes = influence.group_by(STRATUM).agg(
+            pl.col(PSU).n_unique().alias("m"),
+            (pl.col(_CLUSTER_ROWS) > 0).any().alias("used"),
+        )
+        used_sizes = sizes.filter(pl.col("used"))
+        lonely_strata_keys = used_sizes.filter(pl.col("m") < 2).select(STRATUM).to_series().to_list()
+        h2_strata_keys = used_sizes.filter(pl.col("m") >= 2).select(STRATUM).to_series().to_list()
+
+    undefined = influence.select(
+        [pl.col(key).null_count().alias(key) for key in keys]
+    ).row(0, named=True)
+
+    units_df = influence
+    final_stage_cells = None
+
+    for s in range(depth, 0, -1):
+        s_strat = stratum_column(s)
+        s_psu = psu_column(s)
+        s_frac = fraction_column(s)
+
+        strat_aggs = [
+            pl.len().alias("__m"),
+            pl.col(s_frac).first().alias("__f"),
+        ]
+        if s > 1:
+            strat_aggs.append(pl.col(psu_column(s - 1)).first().alias("__parent_psu"))
+            strat_aggs.append(pl.col(stratum_column(s - 1)).first().alias("__parent_strat"))
+            strat_aggs.append(pl.col(fraction_column(s - 1)).first().alias("__parent_frac"))
+
+        for key in keys:
+            strat_aggs.append(
+                ((pl.col(key) - pl.col(key).mean()) ** 2).sum().alias(f"__ssd_{key}")
+            )
+            strat_aggs.append(pl.col(key).sum().alias(key))
+            if s < depth:
+                strat_aggs.append(pl.col(f"__child_term_{key}").sum().alias(f"__child_term_{key}"))
+
+        group_s = units_df.group_by(s_strat).agg(strat_aggs)
+
+        term_exprs = []
+        for key in keys:
+            v_expr = (
+                pl.when(pl.col("__m") >= 2)
+                .then(pl.col("__m").cast(pl.Float64) / (pl.col("__m").cast(pl.Float64) - 1.0) * pl.col(f"__ssd_{key}"))
+                .otherwise(0.0)
+            )
+            if s == depth:
+                term_expr = (1.0 - pl.col("__f")) * v_expr
+            else:
+                term_expr = (1.0 - pl.col("__f")) * v_expr + pl.col("__f") * pl.col(f"__child_term_{key}")
+            term_exprs.append(term_expr.alias(f"__term_{key}"))
+
+        stage_s_cells = group_s.with_columns(term_exprs)
+
+        if s > 1:
+            units_df = stage_s_cells.group_by("__parent_psu").agg(
+                pl.col("__parent_strat").first().alias(stratum_column(s - 1)),
+                pl.col("__parent_frac").first().alias(fraction_column(s - 1)),
+                *[pl.col(key).sum().alias(key) for key in keys],
+                *[pl.col(f"__term_{key}").sum().alias(f"__child_term_{key}") for key in keys],
+            ).rename({"__parent_psu": psu_column(s - 1)})
+        else:
+            final_stage_cells = stage_s_cells
+
+    res_dict: dict[str, float] = {}
+
+    if lonely_strata_keys and lonely_psu in ("adjust", "average", "certainty"):
+        tot_clusters = influence.select(pl.col(PSU).n_unique()).item()
+        all_means = {
+            key: float(influence.select(pl.col(key).sum()).item() or 0.0) / tot_clusters
+            for key in keys
+        }
+
+        h2_vars = {key: 0.0 for key in keys}
+        if lonely_psu == "average" and h2_strata_keys:
+            h2_rows = final_stage_cells.filter(pl.col(STRATUM).is_in(h2_strata_keys))
+            for key in keys:
+                h2_vars[key] = float(h2_rows.select(pl.col(f"__term_{key}").sum()).item() or 0.0) / len(h2_strata_keys)
+
+        for key in keys:
+            val = 0.0
+            for row in final_stage_cells.to_dicts():
+                st = row[STRATUM]
+                if st in lonely_strata_keys:
+                    if lonely_psu == "certainty":
+                        contrib = 0.0
+                    elif lonely_psu == "adjust":
+                        u_h1 = float(row[key] or 0.0)
+                        contrib = (u_h1 - all_means[key]) ** 2
+                    elif lonely_psu == "average":
+                        contrib = h2_vars[key]
+                    val += contrib
+                else:
+                    val += float(row[f"__term_{key}"] or 0.0)
+            res_dict[key] = val
+    else:
+        for key in keys:
+            total_val = float(final_stage_cells.select(pl.col(f"__term_{key}").sum()).item() or 0.0)
+            res_dict[key] = total_val
+
+    for key in keys:
+        if undefined[key]:
+            res_dict[key] = nan
+
+    return res_dict
+
+
+def _pps_variance(
+    influence: pl.DataFrame,
+    keys: tuple[str, ...],
+    degrees: DesignDegrees,
+    design: SurveyDesign,
+    lonely_strata_keys: list[str],
+    h2_strata_keys: list[str],
+) -> dict[str, float]:
+    """Variance calculation for PPS designs."""
+
+    pps = design.pps
+    assert pps is not None
+
+    if pps.method == "with_replacement":
+        return multistage_variance(
+            influence,
+            keys,
+            depth=1,
+            lonely_psu=design.lonely_psu,
+            lonely_strata_keys=lonely_strata_keys,
+            h2_strata_keys=h2_strata_keys,
+        )
+
+    var_method = pps.resolved_variance
+    undefined = influence.select(
+        [pl.col(key).null_count().alias(key) for key in keys]
+    ).row(0, named=True)
+
+    psu_sums = influence.group_by([STRATUM, PSU]).agg(
+        pl.col(PI).first().alias("__pi"),
+        pl.col(PSU).first().alias("__psu_str"),
+        *[pl.col(key).sum().alias(key) for key in keys],
+    )
+
+    if var_method == "sen_yates_grundy":
+        assert pps.joint_probability is not None
+        jp = normalize_joint_probability(pps.joint_probability)
+        jp_dict: dict[tuple[str, str], float] = {}
+        for row in jp.to_dicts():
+            a, b, p = row["psu_a"], row["psu_b"], float(row["pi_ab"])
+            jp_dict[(a, b)] = p
+            jp_dict[(b, a)] = p
+
+        res: dict[str, float] = {key: 0.0 for key in keys}
+
+        for strat, strat_df in psu_sums.group_by(STRATUM):
+            rows = strat_df.to_dicts()
+            m_h = len(rows)
+            if m_h < 2:
+                pi_1 = float(rows[0]["__pi"])
+                if pi_1 == 1.0 or design.lonely_psu == "certainty":
+                    continue
+                continue
+
+            for key in keys:
+                v_h = 0.0
+                for i in range(m_h):
+                    for j in range(m_h):
+                        if i == j:
+                            continue
+                        c_row, d_row = rows[i], rows[j]
+                        c_id = c_row["__psu_str"].split("|")[-1]
+                        d_id = d_row["__psu_str"].split("|")[-1]
+
+                        pair = (c_id, d_id)
+                        if pair not in jp_dict:
+                            raise ValueError(f"missing joint probability for pair ({c_id!r}, {d_id!r})")
+                        pi_cd = jp_dict[pair]
+                        pi_c = float(c_row["__pi"])
+                        pi_d = float(d_row["__pi"])
+                        t_c = float(c_row[key])
+                        t_d = float(d_row[key])
+
+                        coeff = (pi_cd - pi_c * pi_d) / pi_cd
+                        v_h += -0.5 * coeff * ((t_c - t_d) ** 2)
+                res[key] += v_h
+
+        for key in keys:
+            if undefined[key]:
+                res[key] = nan
+        return res
+
+    elif var_method == "hajek":
+        res = {key: 0.0 for key in keys}
+
+        for strat, strat_df in psu_sums.group_by(STRATUM):
+            rows = strat_df.to_dicts()
+            m_h = len(rows)
+            if m_h < 2:
+                pi_1 = float(rows[0]["__pi"])
+                if pi_1 == 1.0 or design.lonely_psu == "certainty":
+                    continue
+                continue
+
+            s_denom = sum(1.0 - float(r["__pi"]) for r in rows)
+            if s_denom == 0.0:
+                continue
+
+            for key in keys:
+                t_star = sum((1.0 - float(r["__pi"])) * float(r[key]) for r in rows) / s_denom
+                v_h = (m_h / (m_h - 1.0)) * sum(
+                    (1.0 - float(r["__pi"])) * ((float(r[key]) - t_star) ** 2) for r in rows
+                )
+                res[key] += v_h
+
+        for key in keys:
+            if undefined[key]:
+                res[key] = nan
+        return res
+
+    return {key: nan for key in keys}
+
+
 def standard_error(variance: float) -> float:
     """Square root of a variance, tolerant of the not-estimable case."""
 
@@ -149,15 +446,7 @@ def confidence_interval(
     level: float = 0.95,
     bounded: bool = True,
 ) -> tuple[float, float]:
-    """Confidence interval for a proportion-like estimate.
-
-    ``normal`` and ``t`` build a symmetric interval and, when ``bounded``, clip
-    it to ``[0, 1]``; that is the truncation convention of
-    ``PythonIPM``. ``logit`` builds the interval on the logit scale and maps it
-    back, so the bounds are respected by construction rather than by clipping;
-    that is the convention of ``svyciprop()`` in R, used by ``mpitb``. PLAN.md §4
-    asks for both, and for the choice to be the caller's.
-    """
+    """Confidence interval for a proportion-like estimate."""
 
     if method not in CI_METHODS:
         raise ValueError(f"ci_method must be one of {CI_METHODS}; got {method!r}")
@@ -168,7 +457,7 @@ def confidence_interval(
 
     tail = 0.5 + level / 2
     if method == "normal":
-        quantile = NormalDist().inv_cdf(tail)
+        quantile = stats.norm.ppf(tail)
     else:
         if df < 1:
             return (nan, nan)
@@ -177,8 +466,6 @@ def confidence_interval(
     if method == "logit":
         spread = estimate * (1.0 - estimate)
         if spread <= 0:
-            # On a boundary the logit transform is undefined; fall back to the
-            # truncated interval rather than returning a degenerate point.
             return _clip(estimate - quantile * se, estimate + quantile * se, bounded)
         centre = log(estimate / (1.0 - estimate))
         margin = quantile * se / spread
@@ -212,11 +499,14 @@ def _expit(value: float) -> float:
 __all__ = [
     "CI_METHODS",
     "DesignDegrees",
+    "LonelyPSUWarning",
     "PSU",
     "STRATUM",
     "coefficient_of_variation",
     "confidence_interval",
     "design_degrees",
+    "design_variance",
+    "multistage_variance",
     "standard_error",
     "taylor_variance",
 ]
