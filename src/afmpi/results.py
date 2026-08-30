@@ -250,6 +250,52 @@ class EstimationResult:
             panel_id=self._panel_id,
         )
 
+    def vcov(
+        self,
+        *,
+        k: float | None = None,
+        over: str | None = None,
+        subgroup: str | None = None,
+        measures: Sequence[str] | None = None,
+    ):
+        """Full variance-covariance matrix of one estimation context (PLAN.md §14.7)."""
+
+        from .estimation import _compute_vcov
+
+        return _compute_vcov(
+            self._matrix,
+            cutoffs=self._cutoffs,
+            over_vars=self._over,
+            k=k,
+            over=over,
+            subgroup=subgroup,
+            measures=measures,
+            convert_fn=self._convert,
+        )
+
+    def test(
+        self,
+        a: object,
+        b: object = None,
+        *,
+        measure: str = "M0",
+        k: float | None = None,
+        dist: str = "F",
+    ):
+        """Wald test of a contrast between two domains, subgroups or periods (PLAN.md §14.7)."""
+
+        from .estimation import _compute_test
+
+        return _compute_test(
+            self._matrix,
+            cutoffs=self._cutoffs,
+            a=a,
+            b=b,
+            measure=measure,
+            k=k,
+            dist=dist,
+        )
+
     def summary(self) -> str:
         """Compact, human-readable summary."""
 

@@ -603,3 +603,75 @@ def replicate_variance(
         variances[key] = float(var_val)
 
     return variances
+
+
+def replicate_vcov(
+    point: tuple[RatioTotals, ...],
+    replicates: Sequence[tuple[RatioTotals, ...]],
+    keys: tuple[str, ...],
+    *,
+    scale: float,
+    rscales: Sequence[float],
+    mse: bool,
+) -> dict[tuple[str, str], float]:
+    """Calculate replicate variance-covariance matrix for estimand keys."""
+
+    if len(rscales) != len(replicates):
+        raise ValueError(
+            f"rscales length ({len(rscales)}) must match "
+            f"number of replicates ({len(replicates)})"
+        )
+
+    R = len(replicates)
+    if R == 0:
+        return {(k1, k2): float("nan") for k1 in keys for k2 in keys}
+
+    theta_hat_map: dict[str, float | None] = {}
+    theta_r_map: dict[str, list[float]] = {}
+    has_nan_map: dict[str, bool] = {}
+
+    for key in keys:
+        pt_ratio = next((r for r in point if r.key == key), None)
+        hat = pt_ratio.value if pt_ratio is not None else None
+        theta_hat_map[key] = hat
+
+        r_list: list[float] = []
+        has_nan = False
+        if hat is None or not isfinite(hat):
+            has_nan = True
+        else:
+            for rep in replicates:
+                r_ratio = next((r for r in rep if r.key == key), None)
+                val = r_ratio.value if r_ratio is not None else None
+                if val is None or not isfinite(val):
+                    has_nan = True
+                    break
+                r_list.append(val)
+
+        has_nan_map[key] = has_nan
+        theta_r_map[key] = r_list
+
+    theta_c_map: dict[str, float] = {}
+    for key in keys:
+        if not has_nan_map[key]:
+            if mse:
+                theta_c_map[key] = theta_hat_map[key]  # type: ignore[assignment]
+            else:
+                theta_c_map[key] = sum(theta_r_map[key]) / R
+
+    vcov: dict[tuple[str, str], float] = {}
+    for k1 in keys:
+        for k2 in keys:
+            if has_nan_map[k1] or has_nan_map[k2]:
+                vcov[(k1, k2)] = float("nan")
+            else:
+                val = scale * sum(
+                    rscales[r]
+                    * (theta_r_map[k1][r] - theta_c_map[k1])
+                    * (theta_r_map[k2][r] - theta_c_map[k2])
+                    for r in range(R)
+                )
+                vcov[(k1, k2)] = float(val)
+
+    return vcov
+

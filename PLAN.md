@@ -975,7 +975,8 @@ lu §14 sous son numéro.
     §6) : covariance inter-vagues
     `Var(Δ) = Var(t+1) + Var(t) − 2·Cov(t+1,t)`, reconnue à partir d'identifiants de panel/PSU
     communs ou de poids de réplicat compatibles entre vagues.
-7. **Tests d'hypothèses et VCOV complète** : `resultat.vcov()` (matrice complète, pas seulement
+7. ✅ **Tests d'hypothèses et VCOV complète** (fait, 2026-08-30, 207/207 tests) :
+   `resultat.vcov()` (matrice complète, pas seulement
    des SE marginales), `resultat.test()` (Wald, différences entre groupes, différences entre
    périodes) — `degf()` déjà posé en phase 2, étendu ici aux domaines/PSU certainty/réplication
    (§6, règle documentée et testée par cas, pas un nombre calculé en silence).

@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, sqrt
 from numbers import Real
 
 import pandas as pd
 import polars as pl
+from scipy import stats
 
 from . import change_over_time, deprivation, domain as domain_module, estimands as estimands_module
 from . import linearization
@@ -25,11 +26,13 @@ from .replicate_estimation import (
     generate_replicate_weights,
     replicate_totals,
     replicate_variance,
+    replicate_vcov,
     replicate_weight_expressions,
 )
 from .results import EstimationResult
 from .specification import Specification
 from .survey_design import SurveyDesign
+from .testing import HypothesisTest
 from .variance import (
     CI_METHODS,
     DesignDegrees,
@@ -37,8 +40,10 @@ from .variance import (
     confidence_interval,
     design_degrees,
     design_variance,
+    design_vcov,
     standard_error,
 )
+
 
 DECOMPOSITION_TOLERANCE = 1e-9
 
@@ -463,6 +468,65 @@ def _estimate_from_matrix(
                             "error": abs(weighted_m0 - national_m0),
                         }
                     )
+    elif design.variance_path == "census":
+        degrees = DesignDegrees(psus=0, strata=0, lonely_strata=0, override_df=0)
+        pop = float(frame.select(base_weight.sum()).item() or 0.0)
+        obs = int(frame.filter(base_weight > 0).height)
+        for cutoff in cutoffs:
+            estimands = estimands_module.build(spec, cutoff)
+            keys = tuple(item.key for item in estimands)
+            ratios = linearization.totals(frame, estimands, weight=base_weight)
+            report = VarianceReport(
+                values={k: 0.0 for k in keys},
+                degrees=degrees,
+                population=pop,
+                observations=obs,
+            )
+            national_rows = _context_rows(
+                ratios, report, cutoff, None, None, ci_method, level
+            )
+            rows.extend(national_rows)
+            national_population = pop
+            national_m0 = _pick(national_rows, "M0")
+
+            for variable in variables:
+                subgroups_list = domain_module.levels(frame, variable)
+                share_total = 0.0
+                weighted_m0 = 0.0
+                for subgroup in subgroups_list:
+                    sub_frame = frame.filter(pl.col(variable).cast(pl.String) == subgroup)
+                    sub_ratios = linearization.totals(sub_frame, estimands, weight=base_weight)
+                    sub_pop = float(sub_frame.select(base_weight.sum()).item() or 0.0)
+                    sub_obs = int(sub_frame.filter(base_weight > 0).height)
+                    sub_report = VarianceReport(
+                        values={k: 0.0 for k in keys},
+                        degrees=degrees,
+                        population=sub_pop,
+                        observations=sub_obs,
+                    )
+                    sub_rows = _context_rows(
+                        sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level
+                    )
+                    rows.extend(sub_rows)
+
+                    if national_population:
+                        share = sub_pop / national_population
+                        share_total += share
+                        subgroup_m0 = _pick(sub_rows, "M0")
+                        if subgroup_m0 is not None:
+                            weighted_m0 += share * subgroup_m0
+
+                if national_m0 is not None:
+                    decomposition.append(
+                        {
+                            "k": cutoff,
+                            "over": variable,
+                            "shares": share_total,
+                            "M0": national_m0,
+                            "decomposed_M0": weighted_m0,
+                            "error": abs(weighted_m0 - national_m0),
+                        }
+                    )
     else:
         raise ValueError(f"unknown variance path: {design.variance_path!r}")
 
@@ -667,4 +731,343 @@ def _validate_over(over: str | Sequence[str] | None) -> tuple[str, ...]:
     return tuple(variables)
 
 
-__all__ = ["DECOMPOSITION_TOLERANCE", "VarianceReport", "estimate"]
+def _compute_vcov(
+    matrix: DeprivationMatrix,
+    *,
+    cutoffs: tuple[float, ...],
+    over_vars: tuple[str, ...],
+    k: float | None = None,
+    over: str | None = None,
+    subgroup: str | None = None,
+    measures: Sequence[str] | None = None,
+    convert_fn=None,
+) -> pl.DataFrame:
+    if k is None:
+        if len(cutoffs) == 1:
+            k = cutoffs[0]
+        else:
+            raise ValueError(f"multiple cutoffs estimated {cutoffs}; specify k=...")
+    if k not in cutoffs:
+        raise ValueError(f"cutoff {k} was not estimated; available cutoffs are {cutoffs}")
+
+    if measures is None:
+        measures_tuple = ("H", "A", "M0")
+    else:
+        measures_tuple = tuple(measures)
+
+    if over is not None:
+        if over not in over_vars and over not in matrix.frame.columns:
+            raise ValueError(f"variable {over!r} not found in estimation over={over_vars!r}")
+        if subgroup is None:
+            raise ValueError(f"subgroup must be specified when over={over!r}")
+
+    spec = matrix.spec
+    design = matrix.design
+    frame = matrix.frame
+    estimands = estimands_module.build(spec, k)
+    estimand_map = {item.key: item for item in estimands}
+
+    for m in measures_tuple:
+        if m not in estimand_map:
+            raise ValueError(f"unknown measure key: {m!r}")
+
+    if design.variance_path == "taylor":
+        group_cols = _stage_group_columns(frame, design)  # type: ignore[arg-type]
+        universe = frame.select(list(group_cols)).unique(maintain_order=True)
+
+        if over is None and subgroup is None:
+            sums = linearization.cluster_sums(frame, estimands, group_columns=group_cols)
+        else:
+            cells = linearization.cluster_sums(frame, estimands, group_columns=group_cols + (over,))
+            sums = _align(cells, universe, over, subgroup, group_cols)
+
+        ratios = linearization.totals_from_clusters(sums, estimands)
+        inf = linearization.cluster_influence(sums, ratios)
+        deg = design_degrees(inf)
+        vcov_dict, _ = design_vcov(inf, measures_tuple, deg, design)  # type: ignore[arg-type]
+
+    elif design.variance_path == "replication":
+        rep_design: ReplicateDesign = design  # type: ignore[assignment]
+        if rep_design.replicate_weights is None:
+            frame_work, repw_cols, scale, rscales = generate_replicate_weights(frame, rep_design)
+            rep_design_active = ReplicateDesign(
+                weights=rep_design.weights,
+                household_size=rep_design.household_size,
+                replicate_weights=repw_cols,
+                method=rep_design.method,
+                strata=rep_design.strata,
+                psu=rep_design.psu,
+                fay=rep_design.fay,
+                scale=scale,
+                rscales=rscales,
+                combined_weights=rep_design.combined_weights,
+                mse=rep_design.mse,
+                degf=rep_design.degf,
+            )
+        else:
+            frame_work = frame
+            scale = rep_design.scale if rep_design.scale is not None else 1.0
+            rscales = rep_design.rscales if rep_design.rscales is not None else ((1.0,) * len(rep_design.replicate_weights))
+            rep_design_active = rep_design
+
+        rep_weight_exprs = replicate_weight_expressions(rep_design_active, frame_work)
+
+        if over is None and subgroup is None:
+            point = linearization.totals(frame_work, estimands)
+            replicates_list = replicate_totals(frame_work, estimands, rep_weight_exprs, batch_size=64)  # type: ignore[assignment]
+        else:
+            sub_frame = frame_work.filter(pl.col(over).cast(pl.String) == subgroup)
+            point = linearization.totals(sub_frame, estimands)
+            sub_dict = replicate_totals(frame_work, estimands, rep_weight_exprs, group_column=over, batch_size=64)
+            replicates_list = sub_dict.get(subgroup, [])  # type: ignore[assignment]
+
+        vcov_dict = replicate_vcov(point, replicates_list, measures_tuple, scale=scale, rscales=rscales, mse=rep_design_active.mse)
+
+    else:  # Census
+        vcov_dict = {(k1, k2): 0.0 for k1 in measures_tuple for k2 in measures_tuple}
+
+    matrix_rows = []
+    for m1 in measures_tuple:
+        row_dict = {"term": m1}
+        for m2 in measures_tuple:
+            val1 = vcov_dict.get((m1, m2), float("nan"))
+            val2 = vcov_dict.get((m2, m1), float("nan"))
+            sym_val = (val1 + val2) / 2.0
+            row_dict[m2] = sym_val
+        matrix_rows.append(row_dict)
+
+    res_df = pl.DataFrame(matrix_rows)
+    if convert_fn:
+        return convert_fn(res_df)
+    return res_df
+
+
+def _compute_test(
+    matrix: DeprivationMatrix,
+    *,
+    cutoffs: tuple[float, ...],
+    a: object,
+    b: object = None,
+    measure: str = "M0",
+    k: float | None = None,
+    dist: str = "F",
+) -> HypothesisTest:
+    if k is None:
+        if len(cutoffs) == 1:
+            k = cutoffs[0]
+        else:
+            raise ValueError(f"multiple cutoffs estimated {cutoffs}; specify k=...")
+    if k not in cutoffs:
+        raise ValueError(f"cutoff {k} was not estimated; available cutoffs are {cutoffs}")
+
+    if dist not in ("F", "chisq"):
+        raise ValueError(f"dist must be 'F' or 'chisq'; got {dist!r}")
+
+    spec = matrix.spec
+    design = matrix.design
+    frame = matrix.frame
+
+    estimands = estimands_module.build(spec, k)
+    estimand_map = {item.key: item for item in estimands}
+    if measure not in estimand_map:
+        raise ValueError(f"unknown measure: {measure!r}")
+
+    def _parse_arg(arg: object) -> tuple[domain_module.Domain, str]:
+        if isinstance(arg, tuple):
+            ov, sg = arg
+            dom = domain_module.of_level(ov, str(sg))
+            return dom, f"{ov}={sg}"
+        elif isinstance(arg, str):
+            dom = domain_module.from_expression(arg)
+            return dom, arg
+        elif isinstance(arg, domain_module.Domain):
+            return arg, arg.label
+        else:
+            raise TypeError(f"domain argument must be a string expression or (over, subgroup) tuple; got {arg!r}")
+
+    dom_a, label_a = _parse_arg(a)
+
+    if b is not None:
+        dom_b, label_b = _parse_arg(b)
+        terms = (label_a, label_b)
+    else:
+        dom_b = None
+        terms = (label_a,)
+
+    target_item = estimand_map[measure]
+
+    if design.variance_path == "taylor":
+        group_cols = _stage_group_columns(frame, design)  # type: ignore[arg-type]
+
+        w_a = dom_a.weight()
+        sums_a = frame.group_by(list(group_cols)).agg(
+            (w_a * target_item.y).sum().alias(linearization._NUMERATOR_PREFIX + target_item.key),
+            (w_a * target_item.x).sum().alias(linearization._DENOMINATOR_PREFIX + target_item.key),
+            pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
+            pl.len().alias("__afmpi_cluster_rows"),
+        )
+        ratios_a = linearization.totals_from_clusters(sums_a, (target_item,))
+        inf_a = linearization.cluster_influence(sums_a, ratios_a).rename({target_item.key: "inf_a"})
+        r_a = ratios_a[0].value
+
+        if dom_b is not None:
+            w_b = dom_b.weight()
+            sums_b = frame.group_by(list(group_cols)).agg(
+                (w_b * target_item.y).sum().alias(linearization._NUMERATOR_PREFIX + target_item.key),
+                (w_b * target_item.x).sum().alias(linearization._DENOMINATOR_PREFIX + target_item.key),
+                pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
+                pl.len().alias("__afmpi_cluster_rows"),
+            )
+            ratios_b = linearization.totals_from_clusters(sums_b, (target_item,))
+            inf_b = linearization.cluster_influence(sums_b, ratios_b).rename({target_item.key: "inf_b"})
+            r_b = ratios_b[0].value
+
+            join_cols = list(group_cols)
+            cluster_inf = inf_a.join(inf_b.select(*group_cols, "inf_b"), on=join_cols, how="left")
+            keys_test = ("inf_a", "inf_b")
+        else:
+            r_b = None
+            cluster_inf = inf_a
+            keys_test = ("inf_a",)
+        full_degrees = design_degrees(cluster_inf)
+
+        vcov_dict, _ = design_vcov(cluster_inf, keys_test, full_degrees, design)  # type: ignore[arg-type]
+
+        v_aa = vcov_dict.get(("inf_a", "inf_a"), float("nan"))
+        if dom_b is not None:
+            v_bb = vcov_dict.get(("inf_b", "inf_b"), float("nan"))
+            v_ab = vcov_dict.get(("inf_a", "inf_b"), float("nan"))
+        else:
+            v_bb = 0.0
+            v_ab = 0.0
+
+        theta_a = r_a
+        theta_b = r_b
+
+    elif design.variance_path == "replication":
+        rep_design: ReplicateDesign = design  # type: ignore[assignment]
+        if rep_design.replicate_weights is None:
+            frame_work, repw_cols, scale, rscales = generate_replicate_weights(frame, rep_design)
+            if rep_design.method == "JKn" and rep_design.strata is not None:
+                H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
+            else:
+                H = 1
+            rep_design_active = ReplicateDesign(
+                weights=rep_design.weights,
+                household_size=rep_design.household_size,
+                replicate_weights=repw_cols,
+                method=rep_design.method,
+                strata=rep_design.strata,
+                psu=rep_design.psu,
+                fay=rep_design.fay,
+                scale=scale,
+                rscales=rscales,
+                combined_weights=rep_design.combined_weights,
+                mse=rep_design.mse,
+                degf=rep_design.degf,
+            )
+        else:
+            frame_work = frame
+            scale = rep_design.scale if rep_design.scale is not None else 1.0
+            rscales = rep_design.rscales if rep_design.rscales is not None else ((1.0,) * len(rep_design.replicate_weights))
+            if rep_design.method == "JKn" and rep_design.strata is not None:
+                H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
+            else:
+                H = 1
+            rep_design_active = rep_design
+
+        rep_weight_exprs = replicate_weight_expressions(rep_design_active, frame_work)
+        R = len(rep_weight_exprs)
+        df_strata = H if (rep_design.method == "JKn" and (rep_design.strata is not None or rep_design.replicate_weights is None)) else 1
+        full_degrees = DesignDegrees(psus=R, strata=df_strata, lonely_strata=0, override_df=rep_design.degf)
+
+        w_a = dom_a.weight()
+        pt_a = linearization.totals(frame_work, (target_item,), weight=w_a)[0]
+        theta_a = pt_a.value
+        reps_a = replicate_totals(frame_work, (target_item,), [w * (w_a > 0).cast(pl.Float64) for w in rep_weight_exprs], batch_size=64)
+
+        if dom_b is not None:
+            w_b = dom_b.weight()
+            pt_b = linearization.totals(frame_work, (target_item,), weight=w_b)[0]
+            theta_b = pt_b.value
+            reps_b = replicate_totals(frame_work, (target_item,), [w * (w_b > 0).cast(pl.Float64) for w in rep_weight_exprs], batch_size=64)
+        else:
+            theta_b = None
+            reps_b = None
+
+        theta_c_a = theta_a if rep_design_active.mse else sum(r[0].value for r in reps_a if r[0].value is not None) / R
+        v_aa = scale * sum(rscales[r] * ((reps_a[r][0].value - theta_c_a) ** 2) for r in range(R))
+
+        if dom_b is not None:
+            theta_c_b = theta_b if rep_design_active.mse else sum(r[0].value for r in reps_b if r[0].value is not None) / R
+            v_bb = scale * sum(rscales[r] * ((reps_b[r][0].value - theta_c_b) ** 2) for r in range(R))
+            v_ab = scale * sum(rscales[r] * (reps_a[r][0].value - theta_c_a) * (reps_b[r][0].value - theta_c_b) for r in range(R))
+        else:
+            v_bb = 0.0
+            v_ab = 0.0
+
+    else:  # Census
+        w_a = dom_a.weight()
+        pt_a = linearization.totals(frame, (target_item,), weight=w_a)[0]
+        theta_a = pt_a.value
+        if dom_b is not None:
+            w_b = dom_b.weight()
+            pt_b = linearization.totals(frame, (target_item,), weight=w_b)[0]
+            theta_b = pt_b.value
+        else:
+            theta_b = None
+        v_aa = 0.0
+        v_bb = 0.0
+        v_ab = 0.0
+        full_degrees = DesignDegrees(psus=0, strata=0, lonely_strata=0, override_df=0)
+
+    df2 = full_degrees.df
+    q = 1
+
+    if dom_b is not None:
+        diff = theta_a - theta_b
+        var_contrast = v_aa + v_bb - 2.0 * v_ab
+    else:
+        diff = theta_a
+        var_contrast = v_aa
+
+    if (dom_b is not None and label_a == label_b) or (diff == 0.0 and var_contrast == 0.0):
+        estimate = 0.0 if dom_b is not None else theta_a
+        se = 0.0
+        statistic = 0.0
+        p_value = 1.0
+    else:
+        estimate = float(diff)
+        if var_contrast < 0 or not isfinite(var_contrast):
+            se = float("nan")
+            statistic = float("nan")
+            p_value = float("nan")
+        else:
+            se = sqrt(var_contrast)
+            if df2 < 1 or se == 0.0:
+                statistic = float("nan")
+                p_value = float("nan")
+            else:
+                W = (estimate ** 2) / var_contrast
+                if dist == "F":
+                    statistic = float(W / q)
+                    p_value = float(stats.f.sf(statistic, q, df2))
+                else:
+                    statistic = float(W)
+                    p_value = float(stats.chi2.sf(statistic, q))
+
+    return HypothesisTest(
+        terms=terms,
+        estimate=estimate,
+        se=se,
+        statistic=statistic,
+        df1=q,
+        df2=df2,
+        p_value=p_value,
+        method="Wald",
+        dist=dist,
+    )
+
+
+__all__ = ["DECOMPOSITION_TOLERANCE", "VarianceReport", "_compute_test", "_compute_vcov", "estimate"]
+
