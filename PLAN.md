@@ -929,15 +929,17 @@ du noyau.)*
 en donne les signatures, les formules et les cas limites. Ne pas implémenter une phase sans avoir
 lu §14 sous son numéro.
 
-4a. **`SurveyDesign` multi-degrés** : `stages=[Stage(...)]` arbitraire (§6 — pas figé à
-    psu=/ssu=), FPC par degré, agrégation hiérarchique personnes→TSU→SSU→PSU→strate (§7).
-4b. **PPS** : `PPSDesign` (§6) — avec/sans remise, probabilités d'inclusion de premier ordre,
-    probabilités conjointes/second ordre si disponibles, méthode de variance correspondante.
-    Sous-phase séparée de 4a (`Fable`, 2026-08-30) : PPS n'est pas qu'un booléen, c'est une
-    méthode de variance à part entière.
-4c. **PSU isolé, les 5 comportements** : `fail`/`certainty`/`adjust`/`average`/`collapse` (§4),
-    chacun testé séparément (sous-phase séparée, `Fable` 2026-08-30 — pas un seul comportement
-    par défaut avec les autres en option non testée).
+4a. ✅ **`SurveyDesign` multi-degrés** (fait, 2026-08-30, tag `v0.3.0`) : `stages=[Stage(...)]`
+    arbitraire (§6 — pas figé à psu=/ssu=), FPC par degré, agrégation hiérarchique
+    personnes→TSU→SSU→PSU→strate (§7).
+4b. ✅ **PPS** (fait, 2026-08-30, tag `v0.3.0`) : `PPSDesign` (§6) — avec/sans remise,
+    probabilités d'inclusion de premier ordre, probabilités conjointes/second ordre si
+    disponibles, méthode de variance correspondante. Sous-phase séparée de 4a (`Fable`,
+    2026-08-30) : PPS n'est pas qu'un booléen, c'est une méthode de variance à part entière.
+4c. ✅ **PSU isolé, les 5 comportements** (fait, 2026-08-30, tag `v0.3.0`) :
+    `fail`/`certainty`/`adjust`/`average`/`collapse` (§4), chacun testé séparément (sous-phase
+    séparée, `Fable` 2026-08-30 — pas un seul comportement par défaut avec les autres en option
+    non testée).
 4.5. ✅ **Stamp de durcissement — rattrapage du jalon 3.5 sur 4a-4c** (fait, 2026-08-30, tag
     `v0.3.0` durci — voir §16 —
     ajouté sur relecture de code réel de 4a-4c par `agy`, le jalon 3.5 n'ayant en réalité jamais
