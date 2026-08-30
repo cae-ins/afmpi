@@ -3147,3 +3147,61 @@ des égalités numériques à 10⁻¹⁰ près contre les valeurs R, dans le mê
 
 **Une fois ce stamp passé** : le noyau 0-3 est enfin gelé méthodologiquement contre un oracle
 externe — la phase 3.5 (§9, §15) est alors réellement close, pas seulement par ricochet via 4.5.
+
+## 18. Stamp — oracle `survey` (R) pour les phases 5-7 (agy, 2026-08-31)
+
+Relecture externe (`agy`, 2026-08-31, sur le code réel de `main` après la phase 7) : l'oracle R
+(`tests/oracle/`) ne couvre que le noyau (§17) et 4a-4c (§16) — pas les méthodes de réplication
+(5a-5c), les panels (6b), ni VCOV/Wald (7). Ces phases ne sont validées qu'en interne (identités
+algébriques, calculs à la main, convergence bootstrap vs Taylor à 2%). C'est la lacune de rigueur
+la plus importante avant la phase 9, et le principal écart restant entre `afmpi` et `mpitbR` en
+maturité de validation.
+
+**Stratégie normative — ne pas essayer de reproduire les tirages aléatoires de R** : pour JK1,
+JKn, BRR, Fay BRR, ne pas générer indépendamment des poids de réplicat côté R et côté `afmpi` en
+espérant qu'ils coïncident (l'ordre/l'algorithme de génération n'ont aucune raison d'être
+identiques). À la place : générer les poids de réplicat avec `afmpi`
+(`generate_replicate_weights`), les exporter (CSV ou `.dta`), les réimporter dans un
+`svrepdesign(repweights=..., type=..., combined.weights=TRUE, scale=..., rscales=...)` construit
+à la main en R avec le MÊME `scale`/`rscales` qu'`afmpi` a produits, puis comparer `SE(svymean())`/
+`SE(svyratio())` entre les deux moteurs sur les MÊMES poids. C'est un test de la formule de
+variance de réplicat, pas de l'algorithme de tirage — c'est ce qui est faisable et ce qui compte
+méthodologiquement (l'algorithme de tirage bootstrap est déjà validé différemment, par
+convergence, §14.5c test #2).
+
+Pour bootstrap et SDR (pas de tirage à faire coïncider non plus, et SDR n'a pas d'équivalent
+direct dans `survey`) : même stratégie — poids générés par `afmpi`, réimportés dans
+`svrepdesign(..., type="other", combined.weights=TRUE, scale=..., rscales=...)` (le type `"other"`
+de `survey` accepte des poids de réplicat arbitraires avec un `scale`/`rscales` fournis), comparer
+la SE obtenue par les deux moteurs sur les mêmes poids.
+
+Pour les panels (6b) et VCOV/Wald (7), R `survey` n'a pas de fonction dédiée équivalente à
+`changes()`/`test()` : construire l'oracle par décomposition manuelle — deux `svydesign`/
+`svrepdesign` (un par vague ou un par sous-groupe), extraire les composantes de `vcov()` en R
+(`vcov(svymean(...))` donne déjà la matrice complète, y compris les termes hors diagonale entre
+domaines si on empile les indicatrices dans une seule formule `svymean(~poor_A + poor_B, ...)` —
+c'est exactement ce qui donne `V_ab` en R sans fonction dédiée), et reconstruire à la main
+`Var(Δ)`/la statistique de Wald à partir de ces composantes, pour comparaison à `afmpi`.
+
+**Portée** :
+1. `tests/oracle/replicate_oracle.R` : JK1, JKn, BRR, Fay BRR — poids exportés depuis `afmpi`,
+   réimportés dans `svrepdesign`, comparaison SE à 10⁻⁸ près minimum (le passage par deux moteurs
+   flottants différents peut perdre un peu de précision par rapport aux 10⁻¹⁰ du noyau — documenter
+   la tolérance réellement atteinte, ne pas forcer 10⁻¹⁰ si ce n'est pas honnête).
+2. `tests/oracle/bootstrap_sdr_oracle.R` : bootstrap et SDR, même stratégie (poids `afmpi`
+   réimportés dans `svrepdesign(type="other", ...)`).
+3. `tests/oracle/panel_oracle.R` : un cas panel parfait et un cas de recouvrement partiel,
+   `vcov(svymean(~poor_t0 + poor_t1, ...))` empilé pour obtenir `Cov(θ̂_t1, θ̂_t0)`, comparaison à
+   `Var(Δ)` d'`afmpi`.
+4. `tests/oracle/vcov_wald_oracle.R` : `vcov(svymean(~poor_A + poor_B, ...))` empilé pour
+   `V_aa`/`V_bb`/`V_ab`, comparaison à `afmpi.vcov()`, et reconstruction manuelle de la statistique
+   de Wald pour comparaison à `afmpi.test()`.
+5. Tests Python correspondants (`tests/test_replicate.py`, `tests/test_panel.py`,
+   `tests/test_vcov.py`/`tests/test_hypothesis.py` — étendre les fichiers existants plutôt qu'en
+   créer de nouveaux) avec les valeurs réellement obtenues de R, jamais devinées (même piège que
+   le stamp 4.5, §16.D — l'orchestrateur re-exécutera les scripts R lui-même avant d'accepter).
+6. `tests/oracle/README.md` : section 4, même format que les sections 1-3 existantes.
+
+**Si ce stamp passe** : les phases 0-7 sont validées contre `survey` (R) dans leur intégralité —
+plus seulement le noyau et 4a-4c. C'est le socle sur lequel la phase 9 (recensement) doit
+s'appuyer sans jamais avoir à revisiter une formule de variance.
