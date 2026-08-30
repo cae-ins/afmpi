@@ -18,6 +18,10 @@ Run the scripts directly from the repository root:
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/core_oracle.R
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/multistage_oracle.R
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/pps_oracle.R
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/replicate_oracle.R
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/bootstrap_sdr_oracle.R
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/panel_oracle.R
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" tests/oracle/vcov_wald_oracle.R
 ```
 
 ## Covered Oracle Reference Values
@@ -77,4 +81,27 @@ Run the scripts directly from the repository root:
     - Logit IC: $[0.31826753987207, 0.99426943479135]$ (delta-method `xlogit`: $[0.31826753451557, 0.99426943512550]$)
     - Unbounded Student-t / Normal IC upper bound: $1.1663072591651$ / $1.0879931412323$ ($> 1$)
 
-Python unit tests in `tests/test_core_oracle.py`, `tests/test_multistage.py` and `tests/test_pps.py` verify equality to these exact values within $10^{-10}$ tolerance.
+### 4. Replication, Panels, VCOV and Wald Tests (`replicate_oracle.R`, `bootstrap_sdr_oracle.R`, `panel_oracle.R`, `vcov_wald_oracle.R`)
+
+- **Replicate Weights (JK1, JKn, BRR, Fay BRR, Bootstrap, SDR)**:
+  - Dataset: 2 strata, 4 PSUs, 12 observations ($H = 0.92857142857143$, $M0 = 0.51984126984127$, $A = 0.55982905982906$).
+  - **JK1**: $SE(H) = 0.071071279268671$, $SE(M0) = 0.030626421024729$, $SE(A) = 0.024096025035658$.
+  - **JKn**: $SE(H) = 0.069789517293668$, $SE(M0) = 0.037001954658435$, $SE(A) = 0.016329009222744$.
+  - **BRR**: $SE(H) = 0.069795497757622$, $SE(M0) = 0.037024245258954$, $SE(A) = 0.016400226923260$.
+  - **Fay BRR ($\rho=0.5$)**: $SE(H) = 0.069746509434807$, $SE(M0) = 0.036986951217994$, $SE(A) = 0.016340629661356$.
+  - **Bootstrap ($R=20$, seed=42)**: $SE(H) = 0.069682973191232$, $SE(M0) = 0.032557022819765$, $SE(A) = 0.017794967898121$.
+  - **SDR**: $SE(H) = 0.079464274906868$, $SE(M0) = 0.037350194761795$, $SE(A) = 0.020547509711949$.
+
+- **Panel & Overlapping Samples**:
+  - **Perfect Panel** (4 households across 2 waves): $H_{t0}\text{ var} = 0.0625$, $H_{t1}\text{ var} = 0.25$, $Cov = 0.125$, $\Delta H = -0.25$, $Var(\Delta H) = 0.0625$ ($SE = 0.25$).
+  - **Partial Overlap Panel** (7 households across 2 waves with partial overlap): $\Delta H = 0.04$, $Var(\Delta H) = 0.15878656$ ($SE = 0.39848031319000$).
+
+- **VCOV Matrix & Wald Hypothesis Testing**:
+  - Dataset: 2 strata, 4 PSUs, 8 observations in 2 groups A and B.
+  - Subgroup A $M0 = 0.625$, $V_{aa} = 0.0703125$.
+  - Subgroup B $M0 = 0.375$, $V_{bb} = 0.0703125$.
+  - Cross-domain covariance: $V_{ab} = -0.0703125$.
+  - Contrast difference $\Delta = 0.25$, $SE(\Delta) = 0.53033008588991$.
+  - Wald F statistic: $F = 0.22222222222222 = 2/9$, $df_1 = 1$, $df_2 = 2$, $p\text{-value} = 0.68377223398316$.
+
+Python unit tests in `tests/test_core_oracle.py`, `tests/test_multistage.py`, `tests/test_pps.py`, `tests/test_replicate_estimation.py`, `tests/test_panel.py`, `tests/test_vcov.py` and `tests/test_hypothesis.py` verify equality to these exact values within $10^{-10}$ tolerance.

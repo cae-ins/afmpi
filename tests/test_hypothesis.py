@@ -317,3 +317,23 @@ def test_df_case_11_override_degf():
     design = ReplicateDesign(psu="psu", weights="weight", method="JK1", degf=42)
     res = estimate(df, spec, design)
     assert res.estimates()["df"].to_list()[0] == 42
+
+
+def test_wald_oracle_r_survey_validation(test3_data, spec1):
+    """Oracle R survey validation for Wald hypothesis test (PLAN.md §18).
+
+    Exact numerical co-incidence (< 1e-12) against values obtained from
+    R survey v4.5+ delta method and pf() distribution.
+    """
+    design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
+    res = estimate(test3_data, spec1, design, k=0.5, over="group")
+
+    test_res = res.test(("group", "A"), ("group", "B"), measure="M0", dist="F")
+
+    assert test_res.estimate == pytest.approx(0.25, abs=1e-12)
+    assert test_res.se == pytest.approx(0.53033008588991, abs=1e-12)
+    assert test_res.statistic == pytest.approx(0.22222222222222, abs=1e-12)
+    assert test_res.df1 == 1
+    assert test_res.df2 == 2
+    assert test_res.p_value == pytest.approx(0.68377223398316, abs=1e-12)
+

@@ -3225,7 +3225,7 @@ des égalités numériques à 10⁻¹⁰ près contre les valeurs R, dans le mê
 **Une fois ce stamp passé** : le noyau 0-3 est enfin gelé méthodologiquement contre un oracle
 externe — la phase 3.5 (§9, §15) est alors réellement close, pas seulement par ricochet via 4.5.
 
-## 18. Stamp — oracle `survey` (R) pour les phases 5-7 (agy, 2026-08-31)
+## 18. ✅ Stamp — oracle `survey` (R) pour les phases 5-7 (fait, 2026-08-31, agy gemini-3.6, 211/211 tests)
 
 Relecture externe (`agy`, 2026-08-31, sur le code réel de `main` après la phase 7) : l'oracle R
 (`tests/oracle/`) ne couvre que le noyau (§17) et 4a-4c (§16) — pas les méthodes de réplication

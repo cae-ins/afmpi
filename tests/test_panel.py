@@ -194,3 +194,53 @@ def test_replicate_design_divergent_weights_raises_error():
 
     with pytest.raises(ValueError, match="Replicate design weights or configuration diverge between waves"):
         estimate(df_rep, spec, rep_design, tvar="wave")
+
+
+def test_panel_oracle_r_survey_validation():
+    """Oracle R survey validation for perfect and partial overlap panels (PLAN.md §18).
+
+    Exact numerical co-incidence (< 1e-12) against values obtained from R survey v4.5+.
+    """
+    # 1. Perfect panel
+    rows_perf_t0 = [
+        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "w": 1.0},
+        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 1, "d2": 0, "w": 1.0},
+        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 0, "d2": 0, "w": 1.0},
+        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 0, "d2": 1, "w": 1.0},
+    ]
+    rows_perf_t1 = [
+        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "w": 1.0},
+        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 1, "d2": 1, "w": 1.0},
+        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 0, "d2": 0, "w": 1.0},
+        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 0, "d2": 0, "w": 1.0},
+    ]
+    df_perf = pl.DataFrame(rows_perf_t0 + rows_perf_t1)
+    spec = Specification(dimensions={"d1": ("d1",), "d2": ("d2",)})
+    design = SurveyDesign(strata="stratum", psu="cluster", weights="w")
+
+    res_perf = estimate(df_perf, spec, design, tvar="wave", panel_id="hhid", overlap="auto")
+    h_abs_perf = res_perf.changes().filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
+    assert h_abs_perf.select("est").item() == pytest.approx(-0.25, abs=1e-12)
+    assert h_abs_perf.select("se").item() == pytest.approx(0.25, abs=1e-12)
+
+    # 2. Partial overlap panel
+    rows_part_t0 = [
+        {"wave": "t0", "stratum": "S1", "cluster": "P1", "hhid": "h1", "d1": 1, "d2": 1, "w": 1.2},
+        {"wave": "t0", "stratum": "S1", "cluster": "P1", "hhid": "h2", "d1": 0, "d2": 1, "w": 0.8},
+        {"wave": "t0", "stratum": "S1", "cluster": "P2", "hhid": "h3", "d1": 1, "d2": 0, "w": 1.0},
+        {"wave": "t0", "stratum": "S2", "cluster": "P3", "hhid": "h5", "d1": 0, "d2": 0, "w": 1.1},
+        {"wave": "t0", "stratum": "S2", "cluster": "P4", "hhid": "h6", "d1": 1, "d2": 1, "w": 0.9},
+    ]
+    rows_part_t1 = [
+        {"wave": "t1", "stratum": "S1", "cluster": "P1", "hhid": "h1", "d1": 1, "d2": 0, "w": 1.2},
+        {"wave": "t1", "stratum": "S1", "cluster": "P1", "hhid": "h2", "d1": 1, "d2": 1, "w": 0.8},
+        {"wave": "t1", "stratum": "S1", "cluster": "P2", "hhid": "h4", "d1": 0, "d2": 1, "w": 1.0},
+        {"wave": "t1", "stratum": "S2", "cluster": "P3", "hhid": "h5", "d1": 0, "d2": 1, "w": 1.1},
+        {"wave": "t1", "stratum": "S2", "cluster": "P4", "hhid": "h7", "d1": 0, "d2": 0, "w": 0.9},
+    ]
+    df_part = pl.DataFrame(rows_part_t0 + rows_part_t1)
+    res_part = estimate(df_part, spec, design, tvar="wave", panel_id="hhid", overlap="auto")
+    h_abs_part = res_part.changes().filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
+    assert h_abs_part.select("est").item() == pytest.approx(0.04, abs=1e-12)
+    assert h_abs_part.select("se").item() == pytest.approx(0.39848031319, abs=1e-10)
+

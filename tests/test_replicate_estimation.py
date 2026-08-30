@@ -794,3 +794,66 @@ def test_sdr_factor_sum_across_replicates_equals_R_per_psu():
         assert rep_sums == pytest.approx(float(R_sdr), abs=1e-12)
 
 
+def test_replicate_oracle_r_survey_validation():
+    """Oracle R survey validation for all 6 replicate methods (PLAN.md §18).
+
+    Exact numerical co-incidence (< 1e-12) against values obtained from
+    R survey v4.5+ svrepdesign(..., type='other', combined.weights=TRUE, scale=..., rscales=..., mse=TRUE).
+    """
+    rows = [
+        {"id": 1,  "stratum": "S1", "psu": "P1", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 2,  "stratum": "S1", "psu": "P1", "w": 1.2, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {"id": 3,  "stratum": "S1", "psu": "P1", "w": 0.8, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
+        {"id": 4,  "stratum": "S1", "psu": "P2", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 5,  "stratum": "S1", "psu": "P2", "w": 0.9, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
+        {"id": 6,  "stratum": "S1", "psu": "P2", "w": 1.3, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
+        {"id": 7,  "stratum": "S2", "psu": "P3", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
+        {"id": 8,  "stratum": "S2", "psu": "P3", "w": 1.4, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {"id": 9,  "stratum": "S2", "psu": "P3", "w": 0.7, "i0": 1, "i1": 0, "i2": 1, "i3": 1},
+        {"id": 10, "stratum": "S2", "psu": "P4", "w": 1.2, "i0": 0, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 11, "stratum": "S2", "psu": "P4", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
+        {"id": 12, "stratum": "S2", "psu": "P4", "w": 0.9, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
+    ]
+    df = pl.DataFrame(rows)
+    spec = Specification(dimensions={"d0": ("i0",), "d1": ("i1",), "d2": ("i2",), "d3": ("i3",)})
+
+    expected = {
+        "JK1": (
+            ReplicateDesign(weights="w", psu="psu", method="JK1"),
+            0.071071279268671, 0.030626421024729, 0.024096025035658
+        ),
+        "JKn": (
+            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="JKn"),
+            0.069789517293668, 0.037001954658435, 0.016329009222744
+        ),
+        "BRR": (
+            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR"),
+            0.069795497757622, 0.037024245258954, 0.016400226923260
+        ),
+        "Fay_BRR": (
+            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5),
+            0.069746509434807, 0.036986951217994, 0.016340629661356
+        ),
+        "bootstrap": (
+            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="bootstrap", seed=42, replicates=20),
+            0.069682973191232, 0.032557022819765, 0.017794967898121
+        ),
+        "SDR": (
+            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="SDR"),
+            0.079464274906868, 0.037350194761795, 0.020547509711949
+        ),
+    }
+
+    for method, (des, exp_h_se, exp_m0_se, exp_a_se) in expected.items():
+        res = estimate(df, spec, des, k=1/3)
+        se_df = res.se()
+        h_se = se_df.filter(pl.col("measure") == "H")["se"].item()
+        m0_se = se_df.filter(pl.col("measure") == "M0")["se"].item()
+        a_se = se_df.filter(pl.col("measure") == "A")["se"].item()
+
+        assert h_se == pytest.approx(exp_h_se, abs=1e-12), f"{method} H SE mismatch"
+        assert m0_se == pytest.approx(exp_m0_se, abs=1e-12), f"{method} M0 SE mismatch"
+        assert a_se == pytest.approx(exp_a_se, abs=1e-12), f"{method} A SE mismatch"
+
+
+

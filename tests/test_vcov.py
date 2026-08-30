@@ -154,3 +154,35 @@ def test_subgroup_vcov_context(sample_data, spec):
     # Check that requiring subgroup when over is provided raises ValueError
     with pytest.raises(ValueError, match="subgroup must be specified"):
         res.vcov(over="region")
+
+
+def test_vcov_oracle_r_survey_validation():
+    """Oracle R survey validation for variance-covariance matrix (PLAN.md §18).
+
+    Exact numerical co-incidence (< 1e-12) against values obtained from
+    R survey v4.5+ delta method on stacked domain indicators.
+    """
+    rows = [
+        {"stratum": "1", "psu": "101", "weight": 1.0, "group": "A", "i1": 1, "i2": 1},
+        {"stratum": "1", "psu": "101", "weight": 1.0, "group": "A", "i1": 1, "i2": 1},
+        {"stratum": "1", "psu": "102", "weight": 1.0, "group": "B", "i1": 1, "i2": 1},
+        {"stratum": "1", "psu": "102", "weight": 1.0, "group": "B", "i1": 1, "i2": 0},
+        {"stratum": "2", "psu": "201", "weight": 1.0, "group": "A", "i1": 1, "i2": 0},
+        {"stratum": "2", "psu": "201", "weight": 1.0, "group": "A", "i1": 0, "i2": 0},
+        {"stratum": "2", "psu": "202", "weight": 1.0, "group": "B", "i1": 0, "i2": 0},
+        {"stratum": "2", "psu": "202", "weight": 1.0, "group": "B", "i1": 0, "i2": 0},
+    ]
+    df = pl.DataFrame(rows)
+    spec = Specification(dimensions={"d1": ("i1", "i2")})
+    design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
+
+    res = estimate(df, spec, design, k=0.5, over="group")
+    vcov_A = res.vcov(over="group", subgroup="A", measures=("M0",))
+    vcov_B = res.vcov(over="group", subgroup="B", measures=("M0",))
+
+    v_aa = vcov_A.filter(pl.col("term") == "M0")["M0"].item()
+    v_bb = vcov_B.filter(pl.col("term") == "M0")["M0"].item()
+
+    assert v_aa == pytest.approx(0.0703125, abs=1e-12)
+    assert v_bb == pytest.approx(0.0703125, abs=1e-12)
+
