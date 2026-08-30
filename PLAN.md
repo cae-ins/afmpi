@@ -1,6 +1,13 @@
 # Plan — `afmpi` : un package Python pour l'IPM (méthode Alkire-Foster)
 
-**Statut** (mis à jour 2026-08-30) : le **noyau v1 et les plans complexes (phases 0 à 4c + stamp 4.5) sont implémentés et durcis** — publiés sur `cae-ins/afmpi`, tag `v0.3.0`. Les phases 5a et suivantes (réplication, etc.) restent à faire ; leur spécification d'exécution complète est au **§14**, qui fait foi pour tout implémenteur.
+**Statut** (mis à jour 2026-08-31) : les **phases 0 à 7 sont implémentées** — noyau, plans
+complexes (4a-4c+4.5), réplication complète (5a-5c), évolution dans le temps (6a-6b), VCOV et
+tests de Wald (7). Publié sur `cae-ins/afmpi` (`main`, 207/207 tests) ; le tag le plus récent
+(`v0.3.0`) est en retard sur `main` — à retaguer en phase 12. Les phases 8 à 12 restent à faire ;
+leur spécification d'exécution complète est au **§14**, qui fait foi pour tout implémenteur.
+Point de rigueur restant avant la phase 9, signalé par une relecture externe (`agy`, 2026-08-31) :
+l'oracle `survey` (R) ne couvre encore que le noyau et 4a-4c (§16-§17), pas les phases 5-7
+(réplication, panels, VCOV/Wald) — validées pour l'instant seulement en interne.
 Dossier de travail : `C:\Users\f.migone\Desktop\projects\actif\afmpi\`.
 
 **Comment lire ce document pour implémenter** : §1-§8 donnent le pourquoi et le cahier des

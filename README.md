@@ -166,7 +166,10 @@ Le tableau ci-dessous illustre la déclaration pour quatre cas d'usage instituti
 
 ## État actuel et roadmap
 
-La version actuelle couvre le **noyau v1, les plans complexes (phases 0 à 4c + stamp 4.5), les plans de réplication (phase 5a/5b/5c) et l'évolution dans le temps pour échantillons indépendants (phase 6a)** ([`PLAN.md`](PLAN.md) §9, §14, §16) :
+La version actuelle couvre les **phases 0 à 7** ([`PLAN.md`](PLAN.md) §9, §14, §16-§17) : le
+noyau (linéarisation Taylor, plans de sondage, domaines), les plans complexes (multi-degrés, PPS,
+grappes isolées), les six méthodes de réplication, l'évolution dans le temps (échantillons
+indépendants et panels/chevauchants), et l'inférence complète (VCOV, tests de Wald) :
 
 - spécification des dimensions et pondérations égales imbriquées ou personnalisées ;
 - politiques de valeurs manquantes `listwise_deletion` et `reweighting` ;
@@ -182,12 +185,22 @@ La version actuelle couvre le **noyau v1, les plans complexes (phases 0 à 4c + 
 - erreurs-types, IC `normal`/`t`/`logit`, degrés de liberté explicites ;
 - estimation par domaine et par sous-groupe sans casser le plan, plusieurs seuils `k`,
   vérification automatique de la décomposabilité ;
-- mesure de l'évolution dans le temps entre vagues d'échantillons indépendants (`tvar`, `cot_year`, `.changes()`) ;
-- validation numérique croisée exacte contre le package `survey` (R 4.5.3) documentée dans `tests/oracle/` ;
+- évolution dans le temps entre vagues, échantillons indépendants et panels/chevauchants
+  (`tvar`, `cot_year`, `overlap`, `panel_id`, `.changes()`) ;
+- `diagnostics()` : table lisible des décisions de design (régime temporel, PSU isolée
+  déclenchée, repli d'IC, rapport de valeurs manquantes) ;
+- matrice de variance-covariance complète (`.vcov()`) et tests de Wald entre domaines/sous-groupes/périodes (`.test()`), covariance inter-groupes toujours calculée, jamais supposée nulle ;
 - intégration continue GitHub Actions (`.github/workflows/tests.yml`) sur Python 3.10, 3.11 et 3.12.
 
-Ne sont pas encore implémentés : la matrice de variance-covariance complète et les tests de Wald (phase 7), la comparaison de panneaux/échantillons chevauchants (phase 6b), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9).
-Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 6 à 12.
+**Validation contre `survey` (R 4.5.3)** (`tests/oracle/`) : couvre aujourd'hui le noyau (SRS,
+stratifié simple, domaines) et les plans complexes (multi-degrés/FPC, PPS SYG/Hájek). **Ne couvre
+pas encore** les méthodes de réplication (JK/JKn/BRR/Fay/bootstrap/SDR), les panels, ni VCOV/Wald
+— ces phases ne sont validées qu'en interne pour l'instant (identités algébriques, calculs à la
+main, convergence bootstrap vs Taylor). Étendre l'oracle R à ce périmètre est la prochaine étape
+de rigueur avant la phase 9.
+
+Ne sont pas encore implémentés : les politiques de valeurs manquantes avancées (`treat_as_nondeprived`, politique personnalisée — phase 8), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9), la suite de conformité statistique complète du §8.A (phase 10).
+Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 8 à 12.
 
 ## Attribution et licence
 
