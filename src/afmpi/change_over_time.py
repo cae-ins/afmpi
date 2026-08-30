@@ -31,10 +31,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from math import isfinite, nan
 from typing import TYPE_CHECKING
+import warnings
 
 import polars as pl
 
-from . import domain as domain_module, estimands as estimands_module
+from . import deprivation, domain as domain_module, estimands as estimands_module
 from . import linearization
 from .deprivation import DeprivationMatrix
 from .design_base import Design
@@ -157,8 +158,13 @@ def compute_changes(
     cot_year: str | None,
     ci_method: str,
     level: float,
-) -> pl.DataFrame:
+    overlap: str = "auto",
+    panel_id: str | None = None,
+) -> tuple[pl.DataFrame, list[dict[str, str]]]:
     """Compute absolute, relative and annualised changes between waves."""
+
+    if overlap not in {"auto", "independent", "panel"}:
+        raise ValueError(f"overlap must be one of {{'auto', 'independent', 'panel'}}; got {overlap!r}")
 
     frame = matrix.frame
     spec = matrix.spec
@@ -176,6 +182,112 @@ def compute_changes(
         .to_list()
     )
     pairs = get_wave_pairs(raw_waves)
+
+    # Overlap detection logic
+    psu_col = deprivation.psu_column(1) if deprivation.psu_column(1) in frame.columns else (deprivation.PSU if deprivation.PSU in frame.columns else None)
+    has_psu_overlap = False
+    n_shared_psus = 0
+    if psu_col:
+        psu_waves = (
+            frame.group_by(psu_col)
+            .agg(pl.col(tvar).n_unique().alias("_nw"))
+            .filter(pl.col("_nw") > 1)
+        )
+        n_shared_psus = psu_waves.height
+        has_psu_overlap = n_shared_psus > 0
+
+    has_panel_overlap = False
+    n_shared_units = 0
+    total_units = 0
+    if panel_id is not None and panel_id in frame.columns:
+        total_units = frame.select(pl.col(panel_id).n_unique()).item() if frame.height else 0
+        panel_waves = (
+            frame.group_by(panel_id)
+            .agg(pl.col(tvar).n_unique().alias("_nw"))
+            .filter(pl.col("_nw") > 1)
+        )
+        n_shared_units = panel_waves.height
+        has_panel_overlap = n_shared_units > 0
+
+    overlap_detected = has_psu_overlap or has_panel_overlap
+
+    if overlap == "panel" and not overlap_detected:
+        raise ValueError("overlap='panel' was requested but no unit is shared between waves")
+
+    if overlap == "auto":
+        active_regime = "panel" if overlap_detected else "independent"
+    elif overlap == "independent":
+        active_regime = "independent"
+    elif overlap == "panel":
+        active_regime = "panel"
+
+    if panel_id is not None and has_panel_overlap and not has_psu_overlap:
+        warnings.warn(
+            "panel_id was provided and contains units shared across waves, but no PSU key is shared between waves. Cluster identifiers are not comparable between waves and covariance will be underestimated.",
+            category=UserWarning,
+            stacklevel=2,
+        )
+
+    if design.variance_path == "replication":
+        rep_design_chk: ReplicateDesign = design  # type: ignore[assignment]
+        if rep_design_chk.replicate_weights is not None:
+            repw_cols_check = rep_design_chk.replicate_weights
+            for w_c in raw_waves:
+                w_fr = frame.filter(pl.col(tvar).cast(pl.String) == w_c)
+                for rw_c in repw_cols_check:
+                    if (
+                        rw_c not in w_fr.columns
+                        or w_fr.select(pl.col(rw_c).null_count()).item() == w_fr.height
+                        or w_fr.select(pl.col(rw_c).is_null().any()).item()
+                        or w_fr.select((pl.col(rw_c) == 0.0).all()).item()
+                    ):
+                        raise ValueError("Replicate design weights or configuration diverge between waves")
+
+    time_diag_rows: list[dict[str, str]] = []
+    if active_regime == "panel":
+        details_parts = []
+        if has_psu_overlap:
+            details_parts.append(f"{n_shared_psus} shared PSUs")
+        if has_panel_overlap:
+            rate = (n_shared_units / total_units * 100.0) if total_units > 0 else 0.0
+            details_parts.append(f"{n_shared_units} shared units on panel_id (matching rate: {rate:.1f}%)")
+        detail_str = f"overlap detected ({', '.join(details_parts)}); panel regime retained"
+        time_diag_rows.append({
+            "topic": "time",
+            "context": f"tvar='{tvar}'",
+            "decision": "panel",
+            "detail": detail_str,
+        })
+    elif overlap == "independent" and overlap_detected:
+        details_parts = []
+        if has_psu_overlap:
+            details_parts.append(f"{n_shared_psus} shared PSUs")
+        if has_panel_overlap:
+            details_parts.append(f"{n_shared_units} shared units on panel_id")
+        detail_str = f"overlap detected ({', '.join(details_parts)}) but deliberately ignored (overlap='independent'); forced independent regime"
+        time_diag_rows.append({
+            "topic": "time",
+            "context": f"tvar='{tvar}'",
+            "decision": "independent",
+            "detail": detail_str,
+        })
+    else:
+        time_diag_rows.append({
+            "topic": "time",
+            "context": f"tvar='{tvar}'",
+            "decision": "independent",
+            "detail": "no unit shared between waves; independent regime retained",
+        })
+
+    if overlap == "independent" and overlap_detected:
+        prefix_cols = list(dict.fromkeys(c for c in (psu_col, deprivation.PSU) if c and c in frame.columns))
+        prefix_exprs = [
+            (pl.col(tvar).cast(pl.String) + pl.lit("__") + pl.col(c).cast(pl.String)).alias(c)
+            for c in prefix_cols
+        ]
+        frame_work = frame.with_columns(prefix_exprs)
+    else:
+        frame_work = frame
 
     if cot_year is not None:
         year_rows = (
@@ -201,16 +313,16 @@ def compute_changes(
     if design.variance_path == "taylor":
         from .estimation import _stage_group_columns
 
-        group_cols = _stage_group_columns(frame, design)  # type: ignore[arg-type]
+        group_cols = _stage_group_columns(frame_work, design)  # type: ignore[arg-type]
         dummy_estimands = estimands_module.build(spec, cutoffs[0])
         full_sums = linearization.cluster_sums(
-            frame, dummy_estimands, base_weight, group_columns=group_cols
+            frame_work, dummy_estimands, base_weight, group_columns=group_cols
         )
         full_degrees = design_degrees(full_sums)
         universe = full_sums.select(list(group_cols)).unique(maintain_order=True)
 
         subgroups_dict = {
-            variable: domain_module.levels(frame, variable) for variable in variables
+            variable: domain_module.levels(frame_work, variable) for variable in variables
         }
 
         for cutoff in cutoffs:
@@ -222,7 +334,7 @@ def compute_changes(
             national_u: dict[str, pl.DataFrame] = {}
 
             for w in raw_waves:
-                w_frame = frame.filter(pl.col(tvar).cast(pl.String) == w)
+                w_frame = frame_work.filter(pl.col(tvar).cast(pl.String) == w)
                 cells_w = linearization.cluster_sums(
                     w_frame, estimands, base_weight, group_columns=group_cols
                 )
@@ -291,7 +403,7 @@ def compute_changes(
 
                 for w in raw_waves:
                     for subgroup in subgroups:
-                        w_sub_frame = frame.filter(
+                        w_sub_frame = frame_work.filter(
                             (pl.col(tvar).cast(pl.String) == w)
                             & (pl.col(variable).cast(pl.String) == subgroup)
                         )
@@ -362,11 +474,11 @@ def compute_changes(
         rep_design: ReplicateDesign = design  # type: ignore[assignment]
 
         if rep_design.replicate_weights is None:
-            frame_work, repw_cols, scale, rscales = generate_replicate_weights(
-                frame, rep_design
+            frame_work_rep, repw_cols, scale, rscales = generate_replicate_weights(
+                frame_work, rep_design
             )
             if rep_design.method == "JKn" and rep_design.strata is not None:
-                H = frame_work.select(
+                H = frame_work_rep.select(
                     pl.col(rep_design.strata).cast(pl.String)
                 ).n_unique()
             else:
@@ -385,8 +497,8 @@ def compute_changes(
                 mse=rep_design.mse,
                 degf=rep_design.degf,
             )
+            frame_work = frame_work_rep
         else:
-            frame_work = frame
             repw_cols = rep_design.replicate_weights
             R = len(repw_cols)
             if rep_design.scale is not None:
@@ -510,7 +622,9 @@ def compute_changes(
                                 break
                             delta_reps.append(v1_r - v0_r)
 
-                        if has_nan:
+                        if overlap == "independent" and overlap_detected:
+                            vars_delta[key] = v1[key] + v0[key]
+                        elif has_nan:
                             vars_delta[key] = nan
                         else:
                             theta_c = (
@@ -628,7 +742,9 @@ def compute_changes(
                                         break
                                     delta_reps.append(v1_r - v0_r)
 
-                                if has_nan:
+                                if overlap == "independent" and overlap_detected:
+                                    vars_delta[key] = v1[key] + v0[key]
+                                elif has_nan:
                                     vars_delta[key] = nan
                                 else:
                                     theta_c = (
@@ -669,7 +785,7 @@ def compute_changes(
     else:
         raise ValueError(f"unknown variance path: {design.variance_path!r}")
 
-    return pl.DataFrame(rows, schema=_CHANGES_SCHEMA)
+    return pl.DataFrame(rows, schema=_CHANGES_SCHEMA), time_diag_rows
 
 
 def _append_change_rows(

@@ -46,6 +46,7 @@ class DesignDegrees:
     strata: int
     lonely_strata: int = 0
     override_df: int | None = None
+    lonely_strata_keys: tuple[str, ...] = ()
 
     @property
     def df(self) -> int:
@@ -68,8 +69,15 @@ def design_degrees(clusters: pl.DataFrame) -> DesignDegrees:
         pl.col(PSU).n_unique().alias("m"),
         (pl.col(_CLUSTER_ROWS) > 0).any().alias("used"),
     )
-    lonely = sizes.filter(pl.col("used") & (pl.col("m") < 2)).height
-    return DesignDegrees(psus=int(psus), strata=int(strata), lonely_strata=int(lonely))
+    lonely_df = sizes.filter(pl.col("used") & (pl.col("m") < 2))
+    lonely = lonely_df.height
+    lonely_keys = tuple(str(k) for k in lonely_df.select(STRATUM).to_series().to_list())
+    return DesignDegrees(
+        psus=int(psus),
+        strata=int(strata),
+        lonely_strata=int(lonely),
+        lonely_strata_keys=lonely_keys,
+    )
 
 
 def taylor_variance(
@@ -135,6 +143,7 @@ def design_variance(
 
     current_influence = influence
     res_degrees = degrees
+    orig_lonely_keys = tuple(str(k) for k in lonely_strata_keys) if lonely_strata_keys else ()
 
     if lonely_strata_keys:
         if policy == "fail":
@@ -143,12 +152,17 @@ def design_variance(
                 category=LonelyPSUWarning,
                 stacklevel=2,
             )
-            return {key: nan for key in keys}, res_degrees
+            return {key: nan for key in keys}, DesignDegrees(
+                degrees.psus, degrees.strata, len(lonely_strata_keys), degrees.override_df, orig_lonely_keys
+            )
 
         elif policy == "certainty":
             # Exclude lonely strata from degrees counting
             without_lonely = current_influence.filter(~pl.col(STRATUM).is_in(lonely_strata_keys))
             res_degrees = design_degrees(without_lonely)
+            res_degrees = DesignDegrees(
+                res_degrees.psus, res_degrees.strata, res_degrees.lonely_strata, res_degrees.override_df, orig_lonely_keys
+            )
 
         elif policy == "collapse":
             collapsed_key = "__afmpi_collapsed"
@@ -176,7 +190,9 @@ def design_variance(
                         category=LonelyPSUWarning,
                         stacklevel=2,
                     )
-                    return {key: nan for key in keys}, res_degrees
+                    return {key: nan for key in keys}, DesignDegrees(
+                        degrees.psus, degrees.strata, len(lonely_strata_keys), degrees.override_df, orig_lonely_keys
+                    )
             res_degrees = design_degrees(current_influence)
             lonely_strata_keys = []
 
@@ -186,7 +202,14 @@ def design_variance(
                 category=LonelyPSUWarning,
                 stacklevel=2,
             )
-            return {key: nan for key in keys}, res_degrees
+            return {key: nan for key in keys}, DesignDegrees(
+                degrees.psus, degrees.strata, len(lonely_strata_keys), degrees.override_df, orig_lonely_keys
+            )
+
+    if orig_lonely_keys:
+        res_degrees = DesignDegrees(
+            res_degrees.psus, res_degrees.strata, res_degrees.lonely_strata, res_degrees.override_df, orig_lonely_keys
+        )
 
     if design.pps is not None:
         v = _pps_variance(

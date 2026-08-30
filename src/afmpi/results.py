@@ -42,6 +42,9 @@ class EstimationResult:
     _tvar: str | None = None
     _cot_year: str | None = None
     _changes: pl.DataFrame | None = None
+    _overlap: str = "auto"
+    _panel_id: str | None = None
+    _diagnostics: pl.DataFrame | None = None
     observations: int = 0
     excluded_observations: int = 0
 
@@ -210,6 +213,19 @@ class EstimationResult:
             raise ValueError("no time variable was declared")
         return self._convert(self._changes.clone())
 
+    def diagnostics(self):
+        """Design decisions taken during estimation, one row each (PLAN.md §14.6b)."""
+
+        if self._diagnostics is None:
+            schema = {
+                "topic": pl.String,
+                "context": pl.String,
+                "decision": pl.String,
+                "detail": pl.String,
+            }
+            return self._convert(pl.DataFrame(schema=schema))
+        return self._convert(self._diagnostics.clone())
+
     def domain(self, expression: str | pl.Expr):
         """Re-estimate on a subpopulation without breaking the design.
 
@@ -230,6 +246,8 @@ class EstimationResult:
             ci_method=self._ci_method,
             level=self._level,
             check_decomposability=False,
+            overlap=self._overlap,
+            panel_id=self._panel_id,
         )
 
     def summary(self) -> str:

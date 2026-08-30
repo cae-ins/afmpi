@@ -970,8 +970,9 @@ lu §14 sous son numéro.
     écart chiffré dans un `CHANGELOG.md`.
 6a. ✅ **Évolution dans le temps — échantillons indépendants** (fait, 2026-08-30, 179/179 tests) :
     paramètres `tvar=`/`cot_year=` de `estimate()` (§6, §12), deltas absolus/relatifs/annualisés.
-6b. **Évolution dans le temps — panels et échantillons chevauchants** (sous-phase à part entière,
-    pas une option de 6a — utilisateur, 2026-08-30, §6) : covariance inter-vagues
+6b. ✅ **Évolution dans le temps — panels et échantillons chevauchants** (fait, 2026-08-30,
+    185/185 tests, sous-phase à part entière, pas une option de 6a — utilisateur, 2026-08-30,
+    §6) : covariance inter-vagues
     `Var(Δ) = Var(t+1) + Var(t) − 2·Cov(t+1,t)`, reconnue à partir d'identifiants de panel/PSU
     communs ou de poids de réplicat compatibles entre vagues.
 7. **Tests d'hypothèses et VCOV complète** : `resultat.vcov()` (matrice complète, pas seulement

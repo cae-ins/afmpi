@@ -87,6 +87,8 @@ def estimate(
     ci_method: str = "logit",
     level: float = 0.95,
     check_decomposability: bool = True,
+    overlap: str = "auto",
+    panel_id: str | None = None,
 ) -> EstimationResult:
     """Estimate Alkire-Foster measures with design-based standard errors."""
 
@@ -105,6 +107,8 @@ def estimate(
         required_vars.append(tvar)
     if cot_year is not None:
         required_vars.append(cot_year)
+    if panel_id is not None and panel_id not in required_vars:
+        required_vars.append(panel_id)
 
     matrix = deprivation.build(
         df,
@@ -122,6 +126,8 @@ def estimate(
         ci_method=ci_method,
         level=level,
         check_decomposability=check_decomposability,
+        overlap=overlap,
+        panel_id=panel_id,
     )
 
 
@@ -138,6 +144,45 @@ def _stage_group_columns(frame: pl.DataFrame, design: SurveyDesign) -> tuple[str
     return tuple(cols)
 
 
+def _check_report_diags(
+    report: VarianceReport,
+    over_name: str | None,
+    subgroup_name: str | None,
+    cutoff_val: float,
+    ratios_tuple: tuple[linearization.RatioTotals, ...],
+    design: Design,
+    ci_method: str,
+    diag_rows: list[dict[str, str]],
+) -> None:
+    if report.degrees.lonely_strata_keys:
+        strata_str = ", ".join(repr(s) for s in report.degrees.lonely_strata_keys)
+        ctx_parts = [f"k={cutoff_val}"]
+        if over_name:
+            ctx_parts.extend([f"over='{over_name}'", f"subgroup='{subgroup_name}'"])
+        ctx_str = ", ".join(ctx_parts)
+        diag_rows.append({
+            "topic": "lonely_psu",
+            "context": ctx_str,
+            "decision": getattr(design, "lonely_psu", "fail"),
+            "detail": f"Stratum/strata [{strata_str}] contain(s) a single PSU",
+        })
+
+    if ci_method == "logit":
+        for ratio in ratios_tuple:
+            val = ratio.value
+            if val is not None and (val <= 0.0 or val >= 1.0):
+                ctx_parts = [f"measure='{ratio.estimand.measure}'", f"k={cutoff_val}"]
+                if over_name:
+                    ctx_parts.extend([f"over='{over_name}'", f"subgroup='{subgroup_name}'"])
+                ctx_str = ", ".join(ctx_parts)
+                diag_rows.append({
+                    "topic": "ci_logit",
+                    "context": ctx_str,
+                    "decision": "fallback_to_linear",
+                    "detail": f"estimate {val:.6g} on boundary [0, 1], fallback to linear CI",
+                })
+
+
 def _estimate_from_matrix(
     matrix: DeprivationMatrix,
     *,
@@ -149,6 +194,8 @@ def _estimate_from_matrix(
     ci_method: str,
     level: float,
     check_decomposability: bool,
+    overlap: str = "auto",
+    panel_id: str | None = None,
 ) -> EstimationResult:
     frame = matrix.frame
     spec = matrix.spec
@@ -162,6 +209,15 @@ def _estimate_from_matrix(
 
     rows: list[dict[str, object]] = []
     decomposition: list[dict[str, object]] = []
+    diag_rows: list[dict[str, str]] = []
+
+    if matrix.excluded_observations > 0:
+        diag_rows.append({
+            "topic": "missing",
+            "context": "deprivation_matrix",
+            "decision": matrix.spec.missing_policy,
+            "detail": f"{matrix.excluded_observations} observation(s) excluded by missing-value policy",
+        })
 
     if design.variance_path == "taylor":
         group_cols = _stage_group_columns(frame, design)  # type: ignore[arg-type]
@@ -180,6 +236,7 @@ def _estimate_from_matrix(
             ratios, report = _taylor_report(
                 national_sums, estimands, keys, design  # type: ignore[arg-type]
             )
+            _check_report_diags(report, None, None, cutoff, ratios, design, ci_method, diag_rows)
             national = _context_rows(
                 ratios, report, cutoff, None, None, ci_method, level
             )
@@ -201,6 +258,7 @@ def _estimate_from_matrix(
                     sub_ratios, sub_report = _taylor_report(
                         sums, estimands, keys, design  # type: ignore[arg-type]
                     )
+                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_ratios, design, ci_method, diag_rows)
                     subgroup_rows = _context_rows(
                         sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level
                     )
@@ -335,6 +393,7 @@ def _estimate_from_matrix(
             national_report = VarianceReport(
                 values=national_vars, degrees=degrees, population=pop, observations=obs
             )
+            _check_report_diags(national_report, None, None, cutoff, national_point, design, ci_method, diag_rows)
             national_rows = _context_rows(
                 national_point, national_report, cutoff, None, None, ci_method, level
             )
@@ -380,6 +439,7 @@ def _estimate_from_matrix(
                         population=sub_pop,
                         observations=sub_obs,
                     )
+                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_point, design, ci_method, diag_rows)
                     sub_rows = _context_rows(
                         sub_point, sub_report, cutoff, variable, subgroup, ci_method, level
                     )
@@ -423,7 +483,14 @@ def _estimate_from_matrix(
 
     changes_frame = None
     if tvar is not None:
-        changes_frame = change_over_time.compute_changes(
+        if ci_method == "logit":
+            diag_rows.append({
+                "topic": "ci_logit",
+                "context": "changes",
+                "decision": "fallback_to_t",
+                "detail": "logit CI method replaced by 't' for change estimates",
+            })
+        changes_frame, time_diag_rows = change_over_time.compute_changes(
             matrix,
             cutoffs=cutoffs,
             variables=variables,
@@ -431,7 +498,18 @@ def _estimate_from_matrix(
             cot_year=cot_year,
             ci_method=ci_method,
             level=level,
+            overlap=overlap,
+            panel_id=panel_id,
         )
+        diag_rows.extend(time_diag_rows)
+
+    _DIAGNOSTICS_SCHEMA = {
+        "topic": pl.String,
+        "context": pl.String,
+        "decision": pl.String,
+        "detail": pl.String,
+    }
+    diagnostics_frame = pl.DataFrame(diag_rows, schema=_DIAGNOSTICS_SCHEMA).unique(maintain_order=True)
 
     return EstimationResult(
         _estimates=estimates,
@@ -445,6 +523,9 @@ def _estimate_from_matrix(
         _tvar=tvar,
         _cot_year=cot_year,
         _changes=changes_frame,
+        _overlap=overlap,
+        _panel_id=panel_id,
+        _diagnostics=diagnostics_frame,
         observations=matrix.observations,
         excluded_observations=matrix.excluded_observations,
     )
