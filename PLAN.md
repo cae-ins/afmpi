@@ -220,56 +220,64 @@ A = Σᵢ wᵢ·cᵢ(k) / Σᵢ wᵢ·1(cᵢ≥k)
 ```
 
 et les contributions relatives (pctbⱼ) sont aussi des ratios. Un moteur statistiquement sérieux
-doit donc savoir produire les **fonctions d'influence / variables linéarisées** de chaque
-estimand AVANT d'appliquer le design d'enquête — pas calculer H, A, M0 puis leur coller chacun
-une `variance_H()`, `variance_A()`, `variance_M0()` séparée et non composable. C'est beaucoup
-plus robuste, et c'est ce que fait `survey` (R) et `svy` (Python) en interne (§12).
+doit donc savoir traiter ces ratios correctement selon la méthode d'inférence choisie — pas
+calculer H, A, M0 puis leur coller chacun une `variance_H()`, `variance_A()`, `variance_M0()`
+séparée et non composable.
 
-Pipeline conceptuel (chaque étage ne connaît que la sortie de l'étage précédent — testable
-isolément, voir §8) :
+**Correction architecturale majeure (utilisateur, 2026-08-30, sur relecture après la revue
+`Fable` — voir §13)** : la version précédente de cette section faisait passer les **trois**
+familles de design (Taylor, réplication, recensement) par un seul étage partagé de « variables
+linéarisées ». C'est **statistiquement faux pour la réplication**. La théorie des méthodes de
+réplication (JK/BRR/Fay BRR/bootstrap) ne linéarise pas : elle **réévalue l'estimateur complet**
+pour chaque jeu de poids de réplicat —
 
 ```
-                       Specification AF
-                             │
-                             ▼
-                    Deprivation Engine
-                             │
-                    g_ij, c_i, poor_i
-                             │
-                             ▼
+θ̂⁽ʳ⁾ = T(w⁽ʳ⁾),   par exemple   A⁽ʳ⁾ = Σᵢ wᵢ⁽ʳ⁾·cᵢ(k) / Σᵢ wᵢ⁽ʳ⁾·1(cᵢ≥k)
+```
+
+puis calcule la variance à partir de la dispersion de θ̂⁽¹⁾, θ̂⁽²⁾, …, θ̂⁽ᴿ⁾ — pas à partir d'une
+fonction d'influence. C'est ce que font `survey` (R) et `svy` (Python) : les deux techniques
+existent en parallèle, elles ne partagent pas de code de linéarisation. Le pipeline correct :
+
+```
                     Estimand Compiler
-                ┌────────────┼────────────┐
-                H            A            M0
-                │            │             │
-                └──── contributions ──────┘
-                             │
-                             ▼
-                    Linearized Variables
-                             │
-                             ▼
-                      Survey Engine
-       ┌─────────┬──────────┬──────────┬───────────┐
-       weights   strata     PSU/SSU    FPC/PPS
-       └─────────┴──────────┴──────────┴───────────┘
-                             │
-                             ▼
-                 VCV / SE / CI / Tests
+                    (H, A, M0, contributions — ponctuels, sans design, §4)
+                            │
+          ┌─────────────────┼─────────────────┐
+          │                 │                 │
+          ▼                 ▼                 ▼
+       Taylor           Replication         Census
+          │                 │                 │
+   Linearization      Re-estimation         Point
+   (fonctions          per replicate        estimate
+   d'influence)      (θ̂⁽ʳ⁾ = T(w⁽ʳ⁾),          (§7 —
+          │           R évaluations       SE_échantillonnage
+          │           complètes de T)        = 0)
+          │                 │                 │
+          └──────────────┬──┴─────────────────┘
+                         ▼
+                  Results / VCOV
+              (coef, confint, vcov, test, degf — §6)
 ```
 
-- **Deprivation Engine** : applique le vecteur z aux indicateurs bruts → `g_ij` (matrice de
-  privation 0/1), `c_i` (score pondéré), `poor_i` (statut de pauvreté au seuil k). Ne connaît
-  rien du plan de sondage.
+- **Deprivation Engine** (en amont, non représenté ci-dessus par souci de lisibilité — voir
+  l'arborescence) : applique le vecteur z aux indicateurs bruts → `g_ij`, `c_i`, `poor_i`. Ne
+  connaît rien du plan de sondage.
 - **Estimand Compiler** : combine `g_ij`/`c_i`/`poor_i` en H, A, M0 et contributions — au niveau
-  *ponctuel*, toujours sans plan de sondage. C'est ici que vivent les formules du §4.
-- **Linearized Variables** : pour chaque estimand qui est un ratio (A, pctbⱼ, et tout ratio de
-  sous-groupe), calcule la variable linéarisée (fonction d'influence) qui remplace ce ratio par
-  une quantité *additive* par observation — c'est cette transformation qui rend la variance
-  correcte, composable, et réutilisable pour n'importe quel design (Taylor ou réplication) sans
-  code dupliqué.
-- **Survey Engine** : applique poids/strates/PSU/SSU/FPC/PPS aux variables linéarisées pour
-  produire VCOV/SE/IC/tests — ce module ne sait rien d'Alkire-Foster, il consomme des variables
-  linéarisées génériques (potentiellement réutilisable pour d'autres estimands hors MPI un jour,
-  bien que ce ne soit pas un objectif du projet — voir §2, hors périmètre).
+  *ponctuel*, toujours sans plan de sondage. C'est ici que vivent les formules du §4. C'est aussi
+  la fonction `T(·)` que la réplication réévalue R fois avec des poids différents.
+- **Taylor → Linearization** : pour chaque estimand qui est un ratio (A, pctbⱼ, ratios de
+  sous-groupe), calcule la fonction d'influence — quantité *additive* par observation qui rend la
+  variance correcte et composable sous linéarisation. **N'alimente que `SurveyDesign`.**
+- **Replication → Re-estimation** : réévalue l'Estimand Compiler complet pour chaque colonne de
+  poids de réplicat (fournie, ou générée en interne selon la méthode — JK1/JKn/BRR/Fay BRR/
+  bootstrap, §6), puis calcule la variance depuis la dispersion des R estimations. **N'alimente
+  que `ReplicateDesign`.** Par lots (batched) pour éviter de matérialiser N×R en mémoire (§7).
+- **Census → Point estimate** : pas d'inférence d'échantillonnage à faire — l'Estimand Compiler
+  suffit, `SE_échantillonnage = 0` (§7). **N'alimente que `CensusDesign`.**
+- **Results/VCOV** : point de convergence commun des trois chemins, produisant la même interface
+  de sortie (`coef()`, `confint()`, `vcov()`, `test()`, `degf()` — §6) quel que soit le design —
+  c'est *l'interface* qui est partagée, pas le calcul de variance lui-même.
 
 ```
 afmpi/
@@ -282,25 +290,37 @@ afmpi/
 │   ├── io.py                    lecture/écriture parquet (streaming), .dta en export seulement
 │   ├── specification.py         Specification : dimensions, indicateurs, poids AF (§4)
 │   │
-│   │   --- Deprivation Engine + Estimand Compiler ---
+│   │   --- Deprivation Engine + Estimand Compiler (communs aux 3 chemins) ---
 │   ├── deprivation.py            g_ij, c_i, poor_i — vecteur z appliqué, sans plan de sondage
-│   ├── estimands.py              H, A, M0, Hⱼ, CHⱼ, actbⱼ, pctbⱼ ponctuels (formules §4)
+│   ├── estimands.py              H, A, M0, Hⱼ, CHⱼ, actbⱼ, pctbⱼ ponctuels (formules §4) —
+│   │                             c'est la fonction T(·) réévaluée par la réplication
 │   │
-│   │   --- Linearized Variables (le cœur de la robustesse, §5) ---
+│   │   --- Chemin Taylor : linéarisation, PAS la réplication (correction §5) ---
 │   ├── linearization.py          fonctions d'influence pour A, pctbⱼ et tout ratio de
-│   │                             sous-groupe — étage central, testé indépendamment (§8)
+│   │                             sous-groupe — n'alimente que survey_design.py
 │   │
-│   │   --- Survey Engine : deux familles de plans (§6) ---
-│   ├── survey_design.py          SurveyDesign (Taylor) : weights, strata (imbriquées), psu,
-│   │                             ssu, fpc (par degré), pps, lonely_psu=
+│   │   --- Chemin Replication : réévaluation, PAS de linéarisation (correction §5) ---
+│   ├── replicate_estimation.py   applique estimands.py à chaque colonne de poids de réplicat,
+│   │                             par lots (§7) ; génère les poids JK1/JKn/BRR/Fay BRR/bootstrap
+│   │                             si non fournis (§6)
+│   │
+│   │   --- Trois familles de design (§6) ---
+│   ├── survey_design.py          SurveyDesign (Taylor) : weights, stages=[Stage(id=, strata=,
+│   │                             fpc=), ...] — degrés arbitraires, pas figés à psu/ssu (§6) ;
+│   │                             pps=PPSDesign(...) — pas un booléen (§6) ; lonely_psu=
 │   ├── replicate_design.py       ReplicateDesign : weights, replicate_weights, method=
-│   │                             (JK1/JKn/BRR/Fay BRR/bootstrap), fay=
+│   │                             (JK1/JKn/BRR/Fay_BRR/bootstrap/SDR), fay=, scale=, rscales=,
+│   │                             combined_weights=, mse=True (MSE vs variance de réplicat
+│   │                             centrée) — cahier des charges enrichi (§6)
 │   ├── census_design.py          CensusDesign : SE=0 pour l'erreur d'échantillonnage (§7)
 │   ├── domain.py                 estimation par domaine sans casser le design (§6) — zéro-
 │   │                             pondération, pas un filtre naïf avant estimation
-│   ├── variance.py               VCOV/SE/CI/tests à partir des variables linéarisées +
-│   │                             n'importe laquelle des 3 familles de design ci-dessus ;
-│   │                             IC normal/t/logit ; tests de Wald, différences de groupes
+│   ├── variance.py               dispatche vers Taylor (linearization.py + agrégation
+│   │                             hiérarchique par degré, §7) ou Replication
+│   │                             (replicate_estimation.py) selon le type de design ; assemble
+│   │                             VCOV/SE/CI/tests ; IC normal/t/logit ; tests de Wald,
+│   │                             différences de groupes ; degf() — degrés de liberté explicites
+│   │                             (§6), pas un détail d'implémentation caché
 │   │
 │   │   --- Composition et résultats ---
 │   ├── contributions.py          actb, pctb, décomposition par dimension
@@ -308,19 +328,22 @@ afmpi/
 │   │                             invariants Σφˡ·M0ˡ = M0 (§8)
 │   ├── robustness.py             robustesse à k (klist)
 │   ├── change_over_time.py       paramètres tvar/cot_year de estimate() (§6, §12) — échantillons
-│   │                             indépendants et panels/chevauchants (§4)
+│   │                             indépendants ; panels/chevauchants avec covariance inter-vagues
+│   │                             (§6, sous-phase dédiée §9) — pas juste une option parmi d'autres
 │   ├── missing.py                politiques de valeurs manquantes : listwise, reweighting,
 │   │                             règles configurables (§4)
 │   └── results.py                EstimationResult : coef(), confint(), summary(), to_frame(),
-│                                  vcov() (matrice complète), provenance de la spécification (§4)
+│                                  vcov() (matrice complète), degf(), provenance de la
+│                                  spécification (§4)
 ├── tests/
 │   ├── test_estimation.py        cas construits à la main (répliquer les auto-contrôles de
 │   │                              PythonIPM/pipeline/*.py --check, mêmes valeurs attendues)
-│   ├── test_linearization.py     variables linéarisées vérifiées indépendamment (§5, §8)
+│   ├── test_linearization.py     variables linéarisées Taylor vérifiées indépendamment (§5, §8)
+│   ├── test_replicate_estimation.py  réévaluation par réplicat vérifiée indépendamment (§5, §8)
 │   ├── test_conformity/          suite de conformité statistique multi-design (§8) — un fichier
-│   │                              par famille de design (SRS, stratifié, grappe, deux degrés,
-│   │                              PPS, FPC, PSU isolé, domaines, k=0/k=1, poids extrêmes,
-│   │                              valeurs manquantes, réplicats)
+│   │                              par famille de design (SRS, stratifié, grappe, multi-degrés,
+│   │                              PPS, FPC par degré, PSU isolé, domaines, k=0/k=1, poids
+│   │                              extrêmes, valeurs manquantes, réplicats, panels chevauchants)
 │   ├── test_invariants.py        invariants mathématiques indépendants des logiciels (§8),
 │   │                              tourne en CI à chaque commit
 │   ├── test_against_mpitb.py     comparaison numérique aux exemples officiels mpitb (§8)
@@ -338,30 +361,53 @@ afmpi/
 ## 6. Trois familles de plans d'enquête, domaines, et l'API publique
 
 **Principe (utilisateur, 2026-08-30)** : la méthode *ultimate cluster* seule ne suffit pas à
-prétendre gérer « tout plan complexe ». `afmpi` doit offrir **trois familles d'inférence**,
-partageant le même étage de variables linéarisées (§5) mais consommées différemment :
+prétendre gérer « tout plan complexe ». `afmpi` doit offrir **trois familles d'inférence** — voir
+§5 pour la correction architecturale majeure : Taylor linéarise, Replication réévalue
+l'estimateur par jeu de poids, Census n'a pas d'inférence d'échantillonnage. Elles ne partagent
+PAS de code de variance, seulement l'interface de résultat (`coef`, `confint`, `vcov`, `degf`).
 
 ```python
 # 1. Taylor / linéarisation — plans avec structure explicite (le cas général)
 design = afmpi.SurveyDesign(
     weights="hh_weight",
-    strata="stratum_id",            # simples ou imbriquées (liste de colonnes)
-    psu="cluster_id",
-    ssu="sub_cluster_id",           # deuxième degré, optionnel
-    fpc=["fpc_stage1", "fpc_stage2"],  # correction de population finie, PAR DEGRÉ
-    pps=False,                      # probabilités inégales / PPS
+    # Degrés ARBITRAIRES (pas figé à deux, psu/ssu) — corrigé (utilisateur, 2026-08-30) : un
+    # design à 2 degrés fixes (psu=/ssu=) ne peut pas dire "multi-degrés" en toute honnêteté.
+    stages=[
+        afmpi.Stage(id="cluster_id", strata="stratum_id", fpc="fpc_stage1"),  # PSU
+        afmpi.Stage(id="sub_cluster_id", fpc="fpc_stage2"),                   # SSU
+        afmpi.Stage(id="household_id", fpc="fpc_stage3"),                    # TSU, si besoin
+    ],
+    # forme minimale équivalente, acceptée en raccourci pour les cas à 1-2 degrés :
+    # ids=["cluster_id", "sub_cluster_id"], strata="stratum_id", fpc=["fpc_stage1", "fpc_stage2"]
+    pps=afmpi.PPSDesign(          # objet, pas un booléen — corrigé (utilisateur, 2026-08-30) :
+        method="without_replacement",   # "with_replacement" | "without_replacement"
+        inclusion_probability="pi",     # probabilités d'inclusion de premier ordre
+        joint_probability=None,         # probabilités conjointes / second ordre, si disponibles
+    ),                             # pps=False (comportement par défaut) = design à probabilités
+                                    # égales, pas de calcul PPS
     lonely_psu="adjust",            # "fail" | "certainty" | "adjust" | "average" | "collapse" —
                                      # PAS un seul comportement implicite (§4, §8)
 )
 
 # 2. Réplication — designs internationaux qui fournissent déjà les poids de réplicat
 #    (DHS, beaucoup d'enquêtes internationales) : évite de reconstruire un plan à partir
-#    de rien quand l'organisme les livre directement.
+#    de rien quand l'organisme les livre directement. Cahier des charges enrichi
+#    (utilisateur, 2026-08-30) pour lire correctement des poids de réplicat déjà produits.
 design = afmpi.ReplicateDesign(
     weights="hh_weight",
-    replicate_weights=[f"repwgt_{i}" for i in range(1, 81)],
-    method="BRR",                   # "JK1" | "JKn" | "BRR" | "Fay_BRR" | "bootstrap"
+    replicate_weights=[f"repwgt_{i}" for i in range(1, 81)],  # colonnes déjà fournies, ou
+                                                                 # générées si absentes (§5)
+    method="BRR",                   # "JK1" | "JKn" | "BRR" | "Fay_BRR" | "bootstrap" | "SDR"
+                                     # (successive difference replication — ajouté §4)
     fay=0.5,                        # coefficient de Fay, si method="Fay_BRR"
+    scale=1.0,                      # facteur d'échelle de la variance de réplicat
+    rscales=None,                   # facteurs par réplicat, si hétérogènes (fichiers officiels)
+    combined_weights=True,          # les poids de réplicat incluent-ils déjà le poids de base,
+                                     # ou faut-il les combiner (combined vs non-combined weights)
+    mse=True,                       # variance MSE (autour de l'estimation ponctuelle) vs
+                                     # variance de réplicat centrée (autour de la moyenne des
+                                     # réplicats) — les deux conventions existent dans la
+                                     # littérature et donnent des résultats différents
 )
 
 # 3. Recensement — pas un échantillon : SE_échantillonnage = 0, voir §7
@@ -390,7 +436,8 @@ resultat = afmpi.estimate(
     ci_method="logit",         # "normal" | "t" | "logit" (défaut) — bornes adaptées §4
     tvar=None, cot_year=None,  # comparaison dans le temps intégrée à estimate() plutôt qu'une
                                 # fonction séparée — reprend le patron mpitb.est(tvar=, cotyear=)
-                                # (§12), simplifie l'API par rapport à un compare_over_time() à part
+                                # (§12) ; si les vagues se chevauchent (panel), voir la note sur
+                                # la covariance inter-vagues ci-dessous — pas qu'une simple option
     missing="listwise",        # ou "reweighting" — politique explicite, pas implicite (§4)
     backend="polars",          # défaut ; "pandas" en repli (plus lent, documenté comme tel)
     lazy=False,                # True -> renvoie un plan de calcul non exécuté, .collect() pour lancer
@@ -399,6 +446,9 @@ resultat = afmpi.estimate(
 resultat.coef()                # H, A, M0 ponctuels, par k et par sous-groupe
 resultat.confint()             # IC
 resultat.vcov()                # matrice variance-covariance complète (H, A, M0, contributions...)
+resultat.degf()                # degrés de liberté explicites (utilisateur, 2026-08-30) — voir
+                                # la note dédiée ci-dessous : df = #PSU - #strates n'est qu'UNE
+                                # convention, elle doit être un objet de premier ordre, pas cachée
 resultat.test(a="region=='Abidjan'", b="region=='Bounkani'")  # Wald, différence entre groupes
 resultat.contributions()       # hd, hdk, actb, pctb par indicateur
 resultat.summary()             # tableau formaté, façon mpitb
@@ -440,6 +490,40 @@ Mécanique interne : le module `domain.py` (§5) applique une indicatrice de dom
 l'étage de linéarisation (poids nul hors domaine, mais la ligne existe toujours pour le calcul
 des strates/PSU), exactement le mécanisme de `subset()` dans `survey` (R) — jamais un `.filter()`
 brut avant `estimate()`.
+
+### Les degrés de liberté sont un objet de première classe, pas un détail caché
+
+**Point ajouté (utilisateur, 2026-08-30)** : le plan mentionnait les IC normal/t/logit sans
+jamais rendre explicite comment les degrés de liberté (df) qui les sous-tendent sont obtenus.
+Convention usuelle : `df = #PSU − #strates`, mais ce n'est qu'UNE convention parmi d'autres, et
+elle évolue avec le contexte — un domaine, des PSU certainty, un design en réplication (où le df
+vient du nombre de réplicats, pas de PSU/strates) n'ont pas le même calcul. Sans le rendre
+explicite, **deux implémentations peuvent produire le même point estimé, la même erreur-type, et
+un IC ou une p-value différents**, uniquement à cause du df — un écart invisible tant qu'on ne
+compare que les estimateurs ponctuels (raison de plus pour la suite de conformité du §8, qui
+compare aussi la VCOV). D'où `resultat.degf()` en API publique (ci-dessus) et une règle
+documentée, testée, par famille de design et par cas (domaine, certainty PSU, réplication),
+plutôt qu'un nombre calculé en silence à l'intérieur de `variance.py`.
+
+### Comparaison dans le temps : panels et échantillons chevauchants, pas juste une option
+
+**Point ajouté (utilisateur, 2026-08-30)** : `tvar=`/`cot_year=` suffit pour des vagues
+indépendantes (deux échantillons distincts), mais pas pour un **panel** ou des échantillons qui
+se chevauchent partiellement (mêmes PSU, voire mêmes ménages, suivis dans le temps). Dans ce cas,
+la variance d'un delta n'est PAS la simple somme des deux variances :
+
+```
+Δ = M0,t+1 − M0,t
+Var(Δ) = Var(M0,t+1) + Var(M0,t) − 2·Cov(M0,t+1, M0,t)
+```
+
+`afmpi` doit donc savoir reconnaître la covariance inter-vagues — typiquement à partir
+d'identifiants de panel/PSU communs entre les deux vagues, ou de poids de réplicat compatibles
+d'une vague à l'autre (mêmes colonnes de réplicat, même méthode). Ignorer ce terme de covariance
+(le traiter comme nul, cas des échantillons réellement indépendants) est un choix valide mais
+doit être **explicite**, pas le comportement par défaut silencieux dès qu'un identifiant de panel
+existe dans les données. C'est une sous-phase testée à part entière (§9), pas une simple option
+supplémentaire de `change_over_time.py`.
 
 Point de design encore ouvert :
 - API orientée objets (`Specification`, `SurveyDesign`/`ReplicateDesign`/`CensusDesign`,
@@ -528,15 +612,44 @@ moteur de calcul.
  variance et résultats finaux (Survey Engine, §5)
 ```
 
-**L'idée clé, à ne pas manquer** : pour la variance par linéarisation, une fois les variables
-linéarisées calculées ligne par ligne, la partie statistiquement lourde (le Survey Engine, §5)
-**n'a pas besoin de rester au niveau des dizaines de millions de lignes** — les sommes par PSU
-(pour l'estimateur *ultimate cluster*, comme pour Taylor en général) peuvent être agrégées une
-fois, tôt dans le pipeline. Concrètement : 30 000 000 personnes → ~10 000 PSU pour les calculs
-finaux de variance. C'est le levier de performance le plus important de toute l'architecture —
-`pl.scan_parquet(...).select(colonnes_utiles).group_by(["psu", "strate", *over]).agg(...)`
-avant même d'atteindre l'étage de variance, plutôt que de faire tourner le calcul de variance
-sur la table complète.
+**L'idée clé, à ne pas manquer** : pour la variance par linéarisation (chemin Taylor, §5), une
+fois les variables linéarisées calculées ligne par ligne, la partie statistiquement lourde (le
+Survey Engine) **n'a pas besoin de rester au niveau des dizaines de millions de lignes** — les
+sommes peuvent être agrégées une fois, tôt dans le pipeline. Cas le plus simple (variance
+*ultimate cluster*, un seul degré) : 30 000 000 personnes → ~10 000 PSU pour les calculs finaux
+de variance. C'est le levier de performance le plus important de l'architecture —
+`pl.scan_parquet(...).select(colonnes_utiles).group_by(["psu", "strate", *over]).agg(...)` avant
+même d'atteindre l'étage de variance, plutôt que de faire tourner le calcul sur la table complète.
+
+**Nuance nécessaire pour les designs à plusieurs degrés (utilisateur, 2026-08-30)** : écraser
+directement au niveau PSU n'est valable que pour un design à un seul degré, ou pour l'estimateur
+*ultimate cluster* qui ignore délibérément les degrés inférieurs. Dès qu'on veut vraiment gérer
+SSU, un troisième degré, et une FPC *à chaque* degré (§4, §6 — `stages=[...]`), il ne faut pas
+toujours tout écraser au niveau PSU : le pipeline doit pouvoir faire des **agrégations
+hiérarchiques**, personnes → TSU → SSU → PSU → strate, avec la contribution de variance propre à
+chaque degré (composantes emboîtées de la variance à plusieurs degrés, comme le fait `survey` en
+R pour les designs multi-degrés). Ça reste extrêmement scalable en Polars (chaque niveau
+d'agrégation est un `group_by` de plus, toujours plus petit que le précédent) — mais c'est
+statistiquement plus général qu'un simple écrasement au niveau PSU, et le module `variance.py`
+(§5) doit implémenter les deux : le raccourci PSU-seul pour *ultimate cluster*/un degré, et
+l'agrégation hiérarchique complète pour les designs multi-degrés déclarés via `stages=`.
+
+**Deux passages pour les ratios (utilisateur, 2026-08-30)**, pas un seul :
+
+```
+Passage 1 — statistiques suffisantes / estimateurs ponctuels
+            Â, Ĥ, M̂0, ... calculés sur l'ensemble des données (streaming, un seul scan)
+
+Passage 2 — variables d'influence / agrégation du design
+            calculées À PARTIR des valeurs globales du passage 1 (Â, Ĥ, M̂0 sont des
+            constantes pour ce passage), puis agrégées par PSU/strate/degré
+```
+
+Pas un problème avec `pl.scan_parquet()` : deux scans columnaires optimisés d'une vingtaine de
+colonnes restent nettement moins coûteux que de matérialiser 100 Go en mémoire d'un coup. Pour la
+réplication (chemin Replication, §5), c'est encore un autre chemin optimisé : réévaluer
+l'Estimand Compiler pour chacun des R jeux de poids **par lots** (batched), jamais tous les R
+jeux à la fois, pour éviter de matérialiser N×R en mémoire.
 
 ### Recensement complet ≠ grand échantillon — `CensusDesign`
 
@@ -680,45 +793,82 @@ si une régression casse la cohérence interne du calcul.
 
 ## 9. Phasage proposé
 
-**Révisé (2026-08-30) suite à l'élévation du cahier des charges (§2, §4)** — le phasage initial
-(6 phases) sous-dimensionnait largement ce qu'implique « moteur de statistique d'enquête », pas
-seulement « calculateur Alkire-Foster ». Nouveau découpage, aligné sur l'architecture en pipeline
-du §5 (chaque phase ajoute un étage ou enrichit un étage existant, jamais les deux à la fois) :
+**Révisé deux fois le 2026-08-30** : d'abord pour l'élévation du cahier des charges (§2, §4),
+puis suite à la revue `Fable` (§13) et aux corrections de l'utilisateur (§13) — phases
+scindées quand une seule était trop grosse pour une passe d'agent sans mémoire, et un **noyau v1
+explicite** isolé pour garantir qu'un produit utilisable existe avant que le cahier des charges
+complet du §4 (très large) ne soit entièrement couvert.
+
+### Noyau v1 — ce qui doit marcher avant tout le reste (recommandation `Fable`, 2026-08-30)
+
+Phases 0-3 + un `SurveyDesign` simple (poids/strates/PSU un degré) + **une seule** méthode de
+réplication (bootstrap, la plus simple à valider). Ce noyau couvre déjà l'essentiel d'un usage
+EHCVM/DHS réel — PPS, FPC multi-degrés, les 5 comportements de PSU isolé, et 4 des 5 méthodes de
+réplication restantes sont un **v2** explicite (phases 4b/4c/5b/5c ci-dessous), pas une condition
+pour publier une première version utilisable. Sans ce jalon intermédiaire, le risque documenté
+par `Fable` est réel : ne jamais converger vers un produit utilisable tant que chaque phase
+ajoute autant de surface que le cahier des charges du §4 le permettrait.
 
 0. ✅ **Socle** (fait, 2026-08-30, tag `v0.1.0`) : `Specification`, `SurveyDesign` minimal (poids
    simples uniquement), `estimate()` en Polars in-memory pour un seul k sans plan de sondage,
    `EstimationResult` (`coef()`, `to_frame()`). 16/16 tests. Publié sur `cae-ins/afmpi`.
-1. **Linéarisation** (§5, l'étage le plus important architecturalement) : `linearization.py` —
-   fonctions d'influence pour A et pctbⱼ, testées indépendamment de tout plan de sondage
+1. **Linéarisation Taylor** (§5 — corrigé : ce chemin n'alimente QUE `SurveyDesign`, pas
+   `ReplicateDesign`, voir la correction architecturale du §5) : `linearization.py` — fonctions
+   d'influence pour A et pctbⱼ, testées indépendamment de tout plan de sondage
    (`test_linearization.py`). Sans cet étage, tout ce qui suit reproduirait le défaut du plan
    initial (une fonction de variance par estimand, non composable).
 2. **`SurveyDesign` de base** : poids + strates simples + PSU (un degré), méthodes d'IC normal/t/
-   logit consommant les variables linéarisées de la phase 1. Tests contre un exemple `mpitb`
-   officiel et contre `survey` (R) sur un design SRS/stratifié simple.
+   logit consommant les variables linéarisées de la phase 1, `degf()` explicite dès cette phase
+   (§6 — pas ajouté après coup, pour ne pas devoir revenir sur l'API de résultat plus tard).
+   Tests contre un exemple `mpitb` officiel et contre `survey` (R) sur un design SRS/stratifié
+   simple.
 3. **Domaines et désagrégation** : `domain.py` (estimation par sous-population sans casser le
    design — §6), `over=[...]`, décomposabilité vérifiée par assertion (`Σφˡ·M0ˡ = M0`), `klist`
    (robustesse à k). Tests : domaines qui traversent les strates, très petits domaines.
-4. **`SurveyDesign` complet** : strates imbriquées, SSU (deuxième degré), FPC par degré, PPS,
-   PSU isolé à options multiples (`fail`/`certainty`/`adjust`/`average`/`collapse`, §4). Chaque
-   option de PSU isolé testée séparément, pas seulement le comportement par défaut.
-5. **`ReplicateDesign`** : JK1/JKn/BRR/Fay BRR/bootstrap d'enquête — pour les fichiers
-   internationaux qui fournissent déjà des poids de réplicat. Rigueur de validation à égaler
-   avec `svy` (§12) : comparer contre `survey` (R) à haute précision, documenter tout écart
-   chiffré dans un `CHANGELOG.md`.
-6. **Évolution dans le temps** : paramètres `tvar=`/`cot_year=` de `estimate()` (§6, §12),
-   échantillons indépendants et panels/échantillons chevauchants (§4), deltas
-   absolus/relatifs/annualisés.
+
+*(Fin du noyau v1. Les phases suivantes élargissent le cahier des charges vers le v2 complet du
+§4 — chacune est un ajout de surface indépendant, pas un correctif du noyau.)*
+
+4a. **`SurveyDesign` multi-degrés** : `stages=[Stage(...)]` arbitraire (§6 — pas figé à
+    psu=/ssu=), FPC par degré, agrégation hiérarchique personnes→TSU→SSU→PSU→strate (§7).
+4b. **PPS** : `PPSDesign` (§6) — avec/sans remise, probabilités d'inclusion de premier ordre,
+    probabilités conjointes/second ordre si disponibles, méthode de variance correspondante.
+    Sous-phase séparée de 4a (`Fable`, 2026-08-30) : PPS n'est pas qu'un booléen, c'est une
+    méthode de variance à part entière.
+4c. **PSU isolé, les 5 comportements** : `fail`/`certainty`/`adjust`/`average`/`collapse` (§4),
+    chacun testé séparément (sous-phase séparée, `Fable` 2026-08-30 — pas un seul comportement
+    par défaut avec les autres en option non testée).
+5a. **`ReplicateDesign` — JK1/JKn** (§5, réévaluation par réplicat, PAS de linéarisation) : les
+    méthodes de jackknife, les plus simples à valider, avant BRR (qui a besoin d'une matrice de
+    Hadamard, `Fable` 2026-08-30).
+5b. **`ReplicateDesign` — BRR/Fay BRR** : génération de la matrice de Hadamard si les poids ne
+    sont pas fournis, coefficient de Fay.
+5c. **`ReplicateDesign` — bootstrap/SDR, et le cahier des charges enrichi** : `scale`, `rscales`,
+    `combined_weights`, `mse` vs variance de réplicat centrée (§4, §6) — pour lire correctement
+    des fichiers de poids de réplicat déjà produits par une institution. Rigueur de validation à
+    égaler avec `svy` (§12) : comparer contre `survey` (R) à haute précision, documenter tout
+    écart chiffré dans un `CHANGELOG.md`.
+6a. **Évolution dans le temps — échantillons indépendants** : paramètres `tvar=`/`cot_year=` de
+    `estimate()` (§6, §12), deltas absolus/relatifs/annualisés.
+6b. **Évolution dans le temps — panels et échantillons chevauchants** (sous-phase à part entière,
+    pas une option de 6a — utilisateur, 2026-08-30, §6) : covariance inter-vagues
+    `Var(Δ) = Var(t+1) + Var(t) − 2·Cov(t+1,t)`, reconnue à partir d'identifiants de panel/PSU
+    communs ou de poids de réplicat compatibles entre vagues.
 7. **Tests d'hypothèses et VCOV complète** : `resultat.vcov()` (matrice complète, pas seulement
    des SE marginales), `resultat.test()` (Wald, différences entre groupes, différences entre
-   périodes).
+   périodes) — `degf()` déjà posé en phase 2, étendu ici aux domaines/PSU certainty/réplication
+   (§6, règle documentée et testée par cas, pas un nombre calculé en silence).
 8. **Politiques de valeurs manquantes configurables** : `missing.py` — `listwise`, `reweighting`,
    règles personnalisées (§4), au lieu de la convention unique héritée de `PythonIPM`.
 9. **Performance et passage à l'échelle recensement** (§7) : E/S parquet en streaming
-   (`pl.scan_parquet`, projection/predicate pushdown), agrégation précoce par PSU × strate ×
-   groupe, `CensusDesign` (SE d'échantillonnage nulle), jeu de données synthétique à l'échelle
-   recensement, suite de benchmarks avec cibles chiffrées, comparaison mesurée à un backend
-   pandas naïf. Volontairement après la rigueur statistique (phases 1-8) : optimiser un calcul
-   encore faux n'a pas de sens.
+   (`pl.scan_parquet`, projection/predicate pushdown), pipeline en deux passages (statistiques
+   suffisantes puis variables d'influence agrégées par degré — §7), agrégation hiérarchique
+   personnes→TSU→SSU→PSU→strate pour les designs multi-degrés (pas un simple écrasement PSU),
+   `CensusDesign` (SE d'échantillonnage nulle), réévaluation par lots pour `ReplicateDesign`
+   (éviter N×R en mémoire, §7), jeu de données synthétique à l'échelle recensement, suite de
+   benchmarks avec cibles chiffrées (§7), comparaison mesurée à un backend pandas naïf.
+   Volontairement après la rigueur statistique (phases 1-8) : optimiser un calcul encore faux
+   n'a pas de sens.
 10. **Suite de conformité statistique complète** (§8) : tous les designs de test du tableau §8.A,
     comparaison à quatre références (`mpitb`, `svy:` Stata, `mpitbR`, `survey` R) sur H/A/M0 *et*
     VCOV, invariants mathématiques en CI à chaque commit (déjà introduits dès la phase 1 pour les
@@ -731,10 +881,10 @@ du §5 (chaque phase ajoute un étage ou enrichit un étage existant, jamais les
     jour. Publication PyPI : jalon distinct, sur nouvelle confirmation explicite de
     l'utilisateur à chaque fois (pas un blanc-seing permanent).
 
-*(Note : seule la phase 0 est faite au 2026-08-30. Les phases 1 à 12 restent à faire — c'est un
-programme de travail substantiel, pas une correction ponctuelle. `agy` doit évaluer si ce
-découpage en 13 phases (0-12) est le bon grain pour des passes `Sol` successives, ou s'il faut
-regrouper certaines phases.)*
+*(Note : seule la phase 0 est faite au 2026-08-30. Les phases 1 à 12 (dont plusieurs scindées en
+sous-phases a/b/c) restent à faire — c'est un programme de travail substantiel, pas une
+correction ponctuelle. Le noyau v1 (phases 0-3) doit être la priorité absolue des prochaines
+passes `Sol` ; les phases 4a et au-delà peuvent s'étaler sur autant de passes que nécessaire.)*
 
 ## 10. Décisions issues de la revue `agy` (2026-08-30, modèle `gemini-3.6-flash-high`)
 
@@ -750,12 +900,16 @@ correspondantes (§4, §6, §7, §9). Rapport complet dans
 - **Cibles de performance confirmées réalistes**, voire prudentes : 10 M lignes / 442
   sous-préfectures en moins de 30 s et moins de 2 Go de RAM avec `LazyFrame` + streaming
   parquet — le jeu synthétique calé sur le découpage administratif ivoirien est jugé
-  représentatif.
+  représentatif. *(Chiffre dépassé — repéré en revue `Fable`, 2026-08-30 : §7 donne « quelques
+  minutes, quelques Go », qui fait foi ; conservé ici tel quel pour l'exactitude historique du
+  compte-rendu d'`agy`.)*
 - **Frontière de la phase 1 précisée** (§9) : Polars fait partie du moteur de calcul dès la
   phase 1 (`estimate()` en Polars in-memory, un seul k, pas de plan de sondage complet) pour
   éviter une refonte plus tard ; en revanche l'E/S parquet avancée, le mode streaming et les
   benchmarks à 10 M lignes restent isolés en phase 4, pour ne pas sur-ingénierier avant que la
-  logique de calcul soit stabilisée et testée.
+  logique de calcul soit stabilisée et testée. *(Numérotation obsolète après le rephasage —
+  repéré en revue `Fable`, 2026-08-30 : « phase 1 » de cette entrée = phase 0 actuelle (faite),
+  « phase 4 » = phase 9 actuelle (performance/recensement) ; le principe reste valide.)*
 - **Nom `afmpi` confirmé** — jugé court, clair, mémorisable.
 - **Angles morts ajoutés** (répercutés en §4 et §8) : traitement des strates à PSU unique
   (*lonely PSUs* — un seul cluster dans un domaine, variance non estimable, cf. le cas déjà géré
@@ -782,6 +936,12 @@ aussi les meilleurs outils Python et R pour le plan de sondage complexe en gén�
 c'est la moitié du problème qu'`afmpi` doit résoudre.
 
 ### A. `svy` remplace `samplics` — pas juste « abandonné », un successeur réel existe
+
+*(Note ajoutée en revue `Fable`, 2026-08-30 : le constat « aucune méthode de réplication » de ce
+paragraphe est obsolète depuis l'élévation du cahier des charges — §4/§6/§9 couvrent maintenant
+JK1/JKn/BRR/Fay BRR/bootstrap/SDR via `ReplicateDesign`. La recommandation qu'il fait plus bas
+est déjà satisfaite ; le reste de l'analyse (métadonnées `svy`, décision de ne pas en dépendre)
+reste valable.)*
 
 `samplics` (évalué en §6-§7 comme dépendance candidate, écartée par `agy`) est en réalité
 **déprécié** : son propre site l'annonce, remplacé par **[`svy`](https://svylab.com/docs/svy)**
@@ -894,7 +1054,8 @@ estimate.to_polars()
 - **Extras de packaging** (`pip install svy[report]`, `svy[all]`) pour des fonctionnalités
   optionnelles lourdes (`great-tables` pour un rendu enrichi) — modèle à reprendre pour un futur
   `afmpi[report]` (sortie formatée façon `mpitb`) plutôt que d'alourdir la dépendance de base.
-  Hors périmètre des phases actuelles, à noter pour le packaging final (§9, phase 7).
+  Hors périmètre des phases actuelles, à noter pour le packaging final (§9, phase 7 à l'époque de
+  cette analyse — phase 11 après le rephasage, note `Fable` 2026-08-30).
 
 ### D. Conclusion — la barre de qualité à viser
 
@@ -911,8 +1072,11 @@ d'`afmpi`, mais la qualité d'ingénierie autour doit être à ce niveau, pas en
 - §5 : `change_over_time.py` redevenu un module interne (pas une API utilisateur séparée) — fait.
 - Nouveau jalon de phasage à ajouter (au-delà de §9, à discuter avec `agy`) : méthodes de
   variance par réplication (bootstrap, jackknife), après la phase 2 (plan de sondage complet) et
-  avant ou après la phase 4 (performance) selon ce qu'`agy` juge prioritaire.
-- README (déjà écrit par `Sol` pour la phase 1, à mettre à jour dans une prochaine passe) : ajouter
+  avant ou après la phase 4 (performance) selon ce qu'`agy` juge prioritaire. *(Fait, sous une
+  forme enrichie — c'est la phase 5 actuelle du §9, avec JK1/JKn/BRR/Fay BRR/bootstrap/SDR,
+  suite à la correction architecturale Taylor/Replication du §5 ; note `Fable` 2026-08-30.)*
+- README (déjà écrit par `Sol` pour la phase 1 [phase 0 après rephasage], à mettre à jour dans
+  une prochaine passe) : ajouter
   la note sur la convention des seuils k en fractions vs pourcentages (point B.4 ci-dessus), pour
   éviter une confusion aux utilisateurs venant de `mpitb`/`mpitbR`.
 
@@ -921,3 +1085,93 @@ Sources consultées : [svylab.com/docs/svy](https://svylab.com/docs/svy),
 [GitHub — girelaignacio/mpitbR](https://github.com/girelaignacio/mpitbR),
 [R Journal — mpitbR](https://journal.r-project.org/articles/RJ-2026-003/),
 [CRAN — survey package](https://cran.r-project.org/web/packages/survey/survey.pdf).
+
+## 13. Revue `Fable` et corrections architecturales de l'utilisateur (2026-08-30)
+
+Après l'élévation du cahier des charges (§2, §4-§9), le plan a été soumis à une revue
+indépendante par un agent Claude en modèle `fable`, puis à une relecture directe de l'utilisateur
+qui a identifié une erreur architecturale plus fondamentale que ce que `Fable` avait signalé.
+Toutes les corrections listées ici sont déjà répercutées dans les sections concernées (§5, §6,
+§7, §9, et des notes ponctuelles en §10/§12) — cette section documente la provenance et le
+raisonnement, pour l'audit, pas des actions restant à faire.
+
+### A. Verdict et constats de `Fable`
+
+*Verdict* : « le plan est ambitieux et globalement cohérent sur le fond, mais porte des traces
+nettes de réécriture partielle non répercutée en amont, et le phasage empile dans plusieurs
+phases plus de surface qu'une passe d'agent sans mémoire ne peut raisonnablement absorber. »
+
+1. §5 disait « deux familles de plans » alors que §6 en définissait trois — corrigé.
+2. §10/§12 contenaient des renvois de phase obsolètes après la renumérotation de §9 — corrigés
+   par des notes ponctuelles plutôt que réécrits (l'exactitude historique de ce que chaque agent
+   a dit à l'époque est préservée).
+3. §12.A affirmait qu'`afmpi` ne prévoyait « aucune méthode de réplication » — obsolète depuis
+   l'élévation du cahier des charges, corrigé par une note.
+4. **Le point le plus important** : le principe du §5 (variables linéarisées) était appliqué de
+   façon uniforme aux trois familles de design, alors que la réplication (JK/BRR/bootstrap) ne
+   linéarise pas en théorie — elle réévalue l'estimateur complet par jeu de poids. Confirmé et
+   développé en détail par l'utilisateur (§13.B).
+5. Phasage trop chargé (strates imbriquées + SSU + FPC par degré + PPS + 5 comportements de PSU
+   isolé dans une seule phase 4 ; 5 méthodes de réplication dans une seule phase 5) — scindé en
+   sous-phases (§9, phases 4a/4b/4c, 5a/5b/5c).
+6. Chiffres de performance divergents entre §7 et l'ancien §10 — signalé, §7 fait foi.
+7. Recommandation d'isoler un noyau v1 explicite pour garantir la convergence vers un produit
+   utilisable — adopté (§9, section « Noyau v1 »).
+
+### B. Corrections architecturales de l'utilisateur, au-delà de ce que `Fable` avait signalé
+
+L'utilisateur a confirmé le point 4 de `Fable` et l'a formalisé mathématiquement, puis ajouté
+sept points supplémentaires que la revue automatisée n'avait pas identifiés :
+
+1. **Séparation Taylor / Réplication dans l'architecture** (§5, correction majeure) : Taylor
+   linéarise (fonctions d'influence), la réplication réévalue `θ̂⁽ʳ⁾ = T(w⁽ʳ⁾)` pour chaque jeu de
+   poids puis calcule la variance depuis la dispersion des R estimations. Les deux ne partagent
+   pas de code de variance, seulement l'interface de résultat.
+2. **Degrés arbitraires, pas figés à PSU/SSU** (§6) : `stages=[Stage(...)]` plutôt que
+   `psu=`/`ssu=`/`fpc=[...]`, qui ne peut pas honnêtement prétendre gérer un design multi-degrés
+   arbitraire.
+3. **PPS comme objet, pas un booléen** (§6) : `PPSDesign(method=, inclusion_probability=,
+   joint_probability=)` — avec/sans remise, probabilités de premier et second ordre, méthode de
+   variance correspondante sont des choix distincts, pas une seule bascule vrai/faux.
+4. **Agrégation hiérarchique, pas seulement PSU** (§7) : la réduction 30M lignes → ~10K PSU est
+   excellente pour *ultimate cluster*/un degré, mais un vrai design multi-degrés (SSU, FPC à
+   chaque degré) a besoin d'agrégations personnes→TSU→SSU→PSU→strate, avec les contributions de
+   variance propres à chaque degré.
+5. **`ReplicateDesign` enrichi** (§4, §6) : SDR (successive difference replication), `scale`,
+   `rscales`, poids combinés/non combinés, variance MSE vs variance de réplicat centrée — pour
+   lire correctement des fichiers de poids de réplicat déjà produits par une institution.
+6. **Degrés de liberté comme objet de première classe** (§6) : `resultat.degf()`, avec une règle
+   documentée et testée par cas (domaine, PSU certainty, réplication) — sinon deux
+   implémentations peuvent avoir le même point estimé et la même erreur-type, et un IC/une
+   p-value différents, uniquement à cause du df.
+7. **Panels et échantillons chevauchants comme sous-phase à part** (§6, §9) :
+   `Var(Δ) = Var(t+1) + Var(t) − 2·Cov(t+1,t)` — la covariance inter-vagues doit être reconnue
+   explicitement (identifiants de panel/PSU communs, ou poids de réplicat compatibles), pas
+   ignorée silencieusement dès qu'un identifiant de panel existe.
+8. **Big data en deux passages** (§7) : passage 1 (statistiques suffisantes/estimateurs
+   ponctuels, un seul scan), passage 2 (variables d'influence calculées à partir des valeurs
+   globales du passage 1, puis agrégées par degré) — pas un seul passage qui mélangerait les
+   deux. Réplication : réévaluation par lots, jamais N×R en mémoire d'un coup.
+
+### C. Verdict final de l'utilisateur, après cette relecture
+
+> « Le plan actuel n'est plus celui d'un "bon package Python MPI". Il décrit maintenant quelque
+> chose de nettement plus ambitieux : un moteur spécialisé Alkire-Foster + survey statistics +
+> columnar execution engine. Et là, oui, je considère désormais réaliste l'objectif de dépasser
+> mpitbR/mpitb comme logiciel, à condition d'exécuter correctement ce plan. »
+
+Notation par dimension (utilisateur, 2026-08-30, avant application des corrections B ci-dessus —
+c'est-à-dire la note du *plan*, pas encore du code, qui n'existe pas au-delà de la phase 0) :
+
+| Dimension | Note |
+|---|---|
+| Alkire-Foster | 10/10 |
+| Architecture statistique | 9,5/10 |
+| Plans complexes | 9/10 |
+| Inférence | 9/10 |
+| Domaines | 10/10 |
+| Réplication | 8,5/10 |
+| Validation | 10/10 |
+| Big data | 9,5/10 |
+| Recensement | 10/10 |
+| Ambition globale | 10/10 |
