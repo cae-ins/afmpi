@@ -46,7 +46,10 @@ class PPSDesign:
 def normalize_joint_probability(
     joint_prob: pl.DataFrame | pd.DataFrame,
 ) -> pl.DataFrame:
-    """Normalize and validate joint inclusion probabilities table."""
+    """Normalize and validate joint inclusion probabilities table.
+
+    Supports optional 'stratum' column for stratum-specific PSU pair lookup.
+    """
 
     if isinstance(joint_prob, pd.DataFrame):
         jp = pl.from_pandas(joint_prob)
@@ -60,11 +63,17 @@ def normalize_joint_probability(
     if missing:
         raise ValueError(f"joint_probability missing required columns: {missing}")
 
-    jp = jp.select(
+    has_stratum = "stratum" in jp.columns
+
+    select_cols = [
         pl.col("psu_a").cast(pl.String),
         pl.col("psu_b").cast(pl.String),
         pl.col("pi_ab").cast(pl.Float64),
-    )
+    ]
+    if has_stratum:
+        select_cols.insert(0, pl.col("stratum").cast(pl.String))
+
+    jp = jp.select(select_cols)
 
     invalid = jp.filter(
         pl.col("pi_ab").is_null()
@@ -85,18 +94,22 @@ def normalize_joint_probability(
         .otherwise(pl.col("psu_a"))
         .alias("__b"),
     )
-    grouped = canonical.group_by(["__a", "__b"]).agg(
+
+    group_keys = ["stratum", "__a", "__b"] if has_stratum else ["__a", "__b"]
+    grouped = canonical.group_by(group_keys).agg(
         pl.col("pi_ab").n_unique().alias("n_uniq"),
     )
     conflicts = grouped.filter(pl.col("n_uniq") > 1)
     if conflicts.height > 0:
         row = conflicts.row(0, named=True)
+        strat_info = f" in stratum {row['stratum']!r}" if has_stratum else ""
         raise ValueError(
-            f"conflicting joint inclusion probabilities for pair ({row['__a']!r}, {row['__b']!r})"
+            f"conflicting joint inclusion probabilities for pair ({row['__a']!r}, {row['__b']!r}){strat_info}"
         )
 
-    return canonical.select(
-        pl.col("__a").alias("psu_a"),
-        pl.col("__b").alias("psu_b"),
-        pl.col("pi_ab"),
-    ).unique()
+    out_cols = (
+        [pl.col("stratum"), pl.col("__a").alias("psu_a"), pl.col("__b").alias("psu_b"), pl.col("pi_ab")]
+        if has_stratum
+        else [pl.col("__a").alias("psu_a"), pl.col("__b").alias("psu_b"), pl.col("pi_ab")]
+    )
+    return canonical.select(out_cols).unique()

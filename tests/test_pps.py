@@ -48,7 +48,7 @@ def test_pps_with_replacement_identical_to_v020(pps_data: pd.DataFrame, spec: Sp
 
 
 def test_sen_yates_grundy_hand_calculated(spec: Specification) -> None:
-    """2. Sen-Yates-Grundy on 2 PSUs per stratum, hand-calculated values in hardcode."""
+    """2. Sen-Yates-Grundy on 2 PSUs per stratum with exact numeric oracle assertions."""
     df = pd.DataFrame(
         [
             {"h": "H1", "psu": "P1", "w": 10.0, "pi": 0.2, "ind1": 1, "ind2": 1},
@@ -75,8 +75,19 @@ def test_sen_yates_grundy_hand_calculated(spec: Specification) -> None:
     )
 
     res = estimate(df, spec, d, k=0.5).estimates()
+
+    h_row = res[res["measure"] == "H"].iloc[0]
     m0_row = res[res["measure"] == "M0"].iloc[0]
-    assert m0_row["se"] > 0
+    a_row = res[res["measure"] == "A"].iloc[0]
+
+    assert h_row["est"] == pytest.approx(0.50, abs=1e-12)
+    assert h_row["se"] == pytest.approx(0.28867513459481287, abs=1e-10)
+
+    assert m0_row["est"] == pytest.approx(0.50, abs=1e-12)
+    assert m0_row["se"] == pytest.approx(0.28867513459481287, abs=1e-10)
+
+    assert a_row["est"] == pytest.approx(1.0, abs=1e-12)
+    assert a_row["se"] == pytest.approx(0.0, abs=1e-12)
 
 
 def test_sen_yates_grundy_independence_gives_zero_variance(spec: Specification) -> None:
@@ -113,7 +124,7 @@ def test_sen_yates_grundy_independence_gives_zero_variance(spec: Specification) 
 
 
 def test_hajek_reproduces_stratified_estimator(spec: Specification) -> None:
-    """4. Hajek with all pi equal to m/M reproduces classic stratified estimator up to FPC."""
+    """4. Hajek with all pi equal to m/M with exact numeric oracle assertions."""
     df = pd.DataFrame(
         [
             {"h": "H1", "psu": "P1", "w": 1.0, "pi": 0.5, "ind1": 1, "ind2": 1},
@@ -135,12 +146,79 @@ def test_hajek_reproduces_stratified_estimator(spec: Specification) -> None:
     )
 
     res = estimate(df, spec, d_hajek, k=0.5).estimates()
+    h_row = res[res["measure"] == "H"].iloc[0]
     m0_row = res[res["measure"] == "M0"].iloc[0]
-    assert m0_row["se"] > 0
+    a_row = res[res["measure"] == "A"].iloc[0]
+
+    assert h_row["est"] == pytest.approx(0.75, abs=1e-12)
+    assert h_row["se"] == pytest.approx(0.17677669529663687, abs=1e-10)
+
+    assert m0_row["est"] == pytest.approx(0.50, abs=1e-12)
+    assert m0_row["se"] == pytest.approx(0.17677669529663687, abs=1e-10)
+
+    assert a_row["est"] == pytest.approx(2.0 / 3.0, abs=1e-12)
+    assert a_row["se"] == pytest.approx(0.07856742013183863, abs=1e-10)
+
+
+def test_pps_with_replacement_hansen_hurwitz_proof(pps_data: pd.DataFrame, spec: Specification) -> None:
+    """5. Proof that PPS with replacement equals Hansen-Hurwitz variance estimator."""
+    d_pps = SurveyDesign(
+        weights="w",
+        strata="h",
+        psu="psu",
+        pps=PPSDesign(method="with_replacement", inclusion_probability="pi"),
+    )
+    d_std = SurveyDesign(weights="w", strata="h", psu="psu")
+
+    res_pps = estimate(pps_data, spec, d_pps, k=0.5).estimates()
+    res_std = estimate(pps_data, spec, d_std, k=0.5).estimates()
+
+    pd.testing.assert_frame_equal(res_pps, res_std)
+
+
+def test_syg_with_duplicate_psu_names_across_strata(spec: Specification) -> None:
+    """6. SYG matching when two strata share PSU names ('P1', 'P2') with different pi_ab."""
+    df = pd.DataFrame(
+        [
+            {"h": "H1", "psu": "P1", "w": 10.0, "pi": 0.2, "ind1": 1, "ind2": 1},
+            {"h": "H1", "psu": "P2", "w": 10.0, "pi": 0.2, "ind1": 0, "ind2": 0},
+            {"h": "H2", "psu": "P1", "w": 5.0, "pi": 0.4, "ind1": 1, "ind2": 0},
+            {"h": "H2", "psu": "P2", "w": 5.0, "pi": 0.4, "ind1": 1, "ind2": 1},
+        ]
+    )
+
+    # Different pi_ab for H1 and H2
+    joint_p = pd.DataFrame(
+        [
+            {"stratum": "H1", "psu_a": "P1", "psu_b": "P2", "pi_ab": 0.03},
+            {"stratum": "H2", "psu_a": "P1", "psu_b": "P2", "pi_ab": 0.12},
+        ]
+    )
+
+    d = SurveyDesign(
+        weights="w",
+        strata="h",
+        psu="psu",
+        pps=PPSDesign(
+            method="without_replacement",
+            inclusion_probability="pi",
+            joint_probability=joint_p,
+            variance="sen_yates_grundy",
+        ),
+    )
+
+    res = estimate(df, spec, d, k=0.5).estimates()
+    m0_row = res[res["measure"] == "M0"].iloc[0]
+    # Per-stratum SYG variance summed across H1 (pi_ab=0.03) and H2 (pi_ab=0.12), each keyed by
+    # (stratum, psu_a, psu_b): had the stratum key been dropped, "P1"/"P2" would collide across
+    # H1/H2 and silently pick up the wrong pi_ab. Value confirmed against R survey::svydesign
+    # (pps = ppsmat(...), variance = "YG") on the equivalent per-stratum design.
+    assert m0_row["est"] == pytest.approx(0.5833333333333334, abs=1e-12)
+    assert m0_row["se"] == pytest.approx(0.19837301190396817, abs=1e-10)
 
 
 def test_pps_errors(spec: Specification) -> None:
-    """5. PPS error validation cases."""
+    """7. PPS error validation cases."""
     with pytest.raises(ValueError, match="inclusion_probability must be provided"):
         PPSDesign(method="without_replacement", inclusion_probability=None)
 

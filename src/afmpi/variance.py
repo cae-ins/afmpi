@@ -330,6 +330,12 @@ def _pps_variance(
     assert pps is not None
 
     if pps.method == "with_replacement":
+        # PPS with replacement (Hansen-Hurwitz estimator):
+        # Under sampling with replacement with selection probabilities p_i, when analysis
+        # weights w_i = 1 / (m * p_i) are passed, computing the single-stage ultimate cluster
+        # variance on the weighted cluster influences u_hc = sum_{j in c} w_hcj * u_hcj yields
+        # V_HH(Y_hat) = [m / (m - 1)] * sum_c (u_hc - u_bar_h)^2.
+        # This is mathematically identical to the Hansen-Hurwitz variance estimator.
         return multistage_variance(
             influence,
             keys,
@@ -353,15 +359,22 @@ def _pps_variance(
     if var_method == "sen_yates_grundy":
         assert pps.joint_probability is not None
         jp = normalize_joint_probability(pps.joint_probability)
-        jp_dict: dict[tuple[str, str], float] = {}
+        has_stratum = "stratum" in jp.columns
+        jp_dict: dict[tuple, float] = {}
         for row in jp.to_dicts():
-            a, b, p = row["psu_a"], row["psu_b"], float(row["pi_ab"])
-            jp_dict[(a, b)] = p
-            jp_dict[(b, a)] = p
+            p = float(row["pi_ab"])
+            if has_stratum:
+                s, a, b = row["stratum"], row["psu_a"], row["psu_b"]
+                jp_dict[(s, a, b)] = p
+                jp_dict[(s, b, a)] = p
+            else:
+                a, b = row["psu_a"], row["psu_b"]
+                jp_dict[(a, b)] = p
+                jp_dict[(b, a)] = p
 
         res: dict[str, float] = {key: 0.0 for key in keys}
 
-        for strat, strat_df in psu_sums.group_by(STRATUM):
+        for strat_key, strat_df in psu_sums.group_by(STRATUM):
             rows = strat_df.to_dicts()
             m_h = len(rows)
             if m_h < 2:
@@ -369,6 +382,8 @@ def _pps_variance(
                 if pi_1 == 1.0 or design.lonely_psu == "certainty":
                     continue
                 continue
+
+            strat_raw = strat_key.split("|")[-1] if isinstance(strat_key, str) and "|" in strat_key else strat_key
 
             for key in keys:
                 v_h = 0.0
@@ -380,9 +395,16 @@ def _pps_variance(
                         c_id = c_row["__psu_str"].split("|")[-1]
                         d_id = d_row["__psu_str"].split("|")[-1]
 
-                        pair = (c_id, d_id)
+                        if has_stratum:
+                            pair = (strat_raw, c_id, d_id)
+                            if pair not in jp_dict:
+                                pair = (c_row[STRATUM], c_id, d_id)
+                        else:
+                            pair = (c_id, d_id)
+
                         if pair not in jp_dict:
-                            raise ValueError(f"missing joint probability for pair ({c_id!r}, {d_id!r})")
+                            strat_ctx = f" in stratum {strat_raw!r}" if has_stratum else ""
+                            raise ValueError(f"missing joint probability for pair ({c_id!r}, {d_id!r}){strat_ctx}")
                         pi_cd = jp_dict[pair]
                         pi_c = float(c_row["__pi"])
                         pi_d = float(d_row["__pi"])

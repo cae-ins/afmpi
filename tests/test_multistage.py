@@ -88,7 +88,7 @@ def test_two_stages_without_fpc_equals_ultimate_cluster(
 
 
 def test_hand_calculated_2stage_example(spec: Specification) -> None:
-    """4. Hand-calculated 2-stage example written in hardcode."""
+    """4. Hand-calculated 2-stage example with exact numeric oracle assertions."""
     df = pd.DataFrame(
         [
             {"h": "H1", "psu": "P1_1", "ssu": "S1_1_1", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 1, "ind2": 1},
@@ -112,13 +112,23 @@ def test_hand_calculated_2stage_example(spec: Specification) -> None:
 
     res = estimate(df, spec, d, k=0.5)
     res_df = res.estimates()
+
+    h_row = res_df[res_df["measure"] == "H"].iloc[0]
     m0_row = res_df[res_df["measure"] == "M0"].iloc[0]
-    assert m0_row["est"] is not None
-    assert m0_row["se"] > 0
+    a_row = res_df[res_df["measure"] == "A"].iloc[0]
+
+    assert h_row["est"] == pytest.approx(0.75, abs=1e-12)
+    assert h_row["se"] == pytest.approx(0.17677669529663687, abs=1e-10)
+
+    assert m0_row["est"] == pytest.approx(0.5625, abs=1e-12)
+    assert m0_row["se"] == pytest.approx(0.16387638252684803, abs=1e-10)
+
+    assert a_row["est"] == pytest.approx(0.75, abs=1e-12)
+    assert a_row["se"] == pytest.approx(0.1284252917281313, abs=1e-10)
 
 
 def test_f1_equals_1_only_stage2_contributes(spec: Specification) -> None:
-    """5. f_1 = 1: only stage 2 contributes to variance."""
+    """5. f_1 = 1: only stage 2 contributes to variance with exact oracle values."""
     df = pd.DataFrame(
         [
             {"h": "H1", "psu": "P1_1", "ssu": "S1_1_1", "f1": 1.0, "f2": 0.5, "w": 1.0, "ind1": 1, "ind2": 1},
@@ -134,9 +144,20 @@ def test_f1_equals_1_only_stage2_contributes(spec: Specification) -> None:
             Stage(id="ssu", fpc="f2"),
         ],
     )
-    res = estimate(df, spec, d, k=0.5).estimates()
-    m0_row = res[res["measure"] == "M0"].iloc[0]
-    assert m0_row["se"] > 0
+    res_df = estimate(df, spec, d, k=0.5).estimates()
+
+    h_row = res_df[res_df["measure"] == "H"].iloc[0]
+    m0_row = res_df[res_df["measure"] == "M0"].iloc[0]
+    a_row = res_df[res_df["measure"] == "A"].iloc[0]
+
+    assert h_row["est"] == pytest.approx(0.75, abs=1e-12)
+    assert h_row["se"] == pytest.approx(0.17677669529663687, abs=1e-10)
+
+    assert m0_row["est"] == pytest.approx(0.50, abs=1e-12)
+    assert m0_row["se"] == pytest.approx(0.17677669529663687, abs=1e-10)
+
+    assert a_row["est"] == pytest.approx(2.0 / 3.0, abs=1e-12)
+    assert a_row["se"] == pytest.approx(0.07856742013183863, abs=1e-10)
 
 
 def test_multistage_errors(spec: Specification) -> None:

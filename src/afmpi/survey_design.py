@@ -51,8 +51,13 @@ class SurveyDesign:
     stages: tuple[Stage, ...] | None = field(default=None, kw_only=True)
     pps: PPSDesign | None = field(default=None, kw_only=True)
     lonely_psu: str = field(default="fail", kw_only=True)
+    missing_design: str = field(default="error", kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.missing_design not in ("error", "fill_null"):
+            raise ValueError(
+                f"missing_design must be 'error' or 'fill_null'; got {self.missing_design!r}"
+            )
         for field_name in ("weights", "household_size", "strata", "psu"):
             value = getattr(self, field_name)
             if value is not None and (not isinstance(value, str) or not value.strip()):

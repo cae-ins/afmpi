@@ -347,3 +347,23 @@ def test_design_columns_must_be_distinct_and_present():
         SurveyDesign(weights="w", psu="w")
     with pytest.raises(ValueError, match="columns absent"):
         estimate(FOUR_HOUSEHOLDS, FOUR_SPEC, SurveyDesign(psu="unknown_column"))
+
+
+def test_missing_design_default_error_rejects_null_design_columns():
+    """missing_design='error' (default) rejects nulls in strata/psu/fpc columns."""
+    df_missing = FOUR_HOUSEHOLDS.with_columns(
+        pl.when(pl.col("grappe") == 1).then(None).otherwise(pl.col("grappe")).alias("grappe")
+    )
+
+    design_default = SurveyDesign("ponderation_menage", psu="grappe")
+    with pytest.raises(ValueError, match="design column 'grappe' contains 1 missing value"):
+        estimate(df_missing, FOUR_SPEC, design_default)
+
+    design_fill = SurveyDesign("ponderation_menage", psu="grappe", missing_design="fill_null")
+    res = estimate(df_missing, FOUR_SPEC, design_fill)
+    assert res is not None
+
+
+def test_invalid_missing_design_option_is_rejected():
+    with pytest.raises(ValueError, match="missing_design must be 'error' or 'fill_null'"):
+        SurveyDesign(missing_design="invalid")

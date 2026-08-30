@@ -264,8 +264,37 @@ def _apply_missing_policy(frame: pl.DataFrame, spec: Specification) -> pl.DataFr
     )
 
 
+def _validate_no_missing_design_columns(frame: pl.DataFrame, design: SurveyDesign) -> None:
+    if design.missing_design != "error":
+        return
+
+    cols_to_check: list[str] = []
+    if design.stages is None:
+        if design.strata is not None:
+            cols_to_check.append(design.strata)
+        if design.psu is not None:
+            cols_to_check.append(design.psu)
+    else:
+        for stage in design.stages:
+            if stage.strata is not None:
+                cols_to_check.append(stage.strata)
+            if stage.id is not None:
+                cols_to_check.append(stage.id)
+            if stage.fpc is not None:
+                cols_to_check.append(stage.fpc)
+
+    for col in cols_to_check:
+        null_count = frame.select(pl.col(col).is_null().sum()).item()
+        if null_count > 0:
+            raise ValueError(
+                f"design column {col!r} contains {null_count} missing value(s); missing_design='error' (the default) rejects missing design identifiers"
+            )
+
+
 def _add_design_identifiers(frame: pl.DataFrame, design: SurveyDesign) -> pl.DataFrame:
     """Materialise stratum, PSU and FPC keys across sampling stages."""
+
+    _validate_no_missing_design_columns(frame, design)
 
     stages = design.resolved_stages
     if len(stages) == 0:

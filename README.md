@@ -116,7 +116,7 @@ restent intactes pour la variance, tandis que les degrés de liberté sont compt
 grappes et strates que le domaine atteint réellement — la règle appliquée par `degf()` sur un
 `subset()` du package `survey` (R).
 
-### Variance, intervalles et degrés de liberté
+### Variance, plans complexes et degrés de liberté
 
 La variance est celle du ratio linéarisé (fonctions d'influence, méthode de Taylor), agrégée
 par grappe puis par strate :
@@ -125,42 +125,52 @@ par grappe puis par strate :
 V = Σ_h [ m_h / (m_h − 1) · Σ_c (u_hc − ū_h)² ]
 ```
 
-Sans strate déclarée, elle se réduit exactement à l'estimateur *ultimate cluster* de
+Pour les plans à plusieurs degrés (`stages=[Stage(...)]`), l'agrégation hiérarchique calcule la
+contribution de chaque degré avec sa propre correction de population finie (FPC). Pour les plans PPS,
+l'inférence prend en compte les probabilités d'inclusion de premier et second ordre (Sen-Yates-Grundy,
+Hájek, Hansen-Hurwitz).
+
+Cinq politiques de traitement des strates à grappe isolée (*lonely PSUs*) sont supportées :
+`fail` (par défaut, émet un `LonelyPSUWarning` et renvoie `nan` sur le contexte), `certainty`,
+`adjust`, `average`, et `collapse`. Par défaut (`missing_design="error"`), les colonnes de strate,
+de grappe ou de FPC ne doivent pas contenir de valeurs manquantes (rejet explicite avec le nombre
+de lignes concernées).
+
+Sans strate déclarée, la variance se réduit exactement à l'estimateur *ultimate cluster* de
 `PythonIPM`. Sans grappe déclarée, chaque ligne est sa propre grappe (sondage aléatoire simple
-avec remise). `df = grappes − strates`. Une strate à une seule grappe rend la variance non
-identifiable : `afmpi` renvoie alors une erreur-type et un intervalle manquants plutôt qu'une
-valeur inventée. Deux bornages sont disponibles : `logit` (bornes respectées par construction,
-convention de `svyciprop`) et `normal`/`t` (symétriques, tronqués à `[0, 1]`, convention de
-`PythonIPM`).
+avec remise). `df = grappes − strates`. Deux bornages sont disponibles : `logit` (bornes respectées
+par construction, convention de `svyciprop`) et `normal`/`t` (symétriques, tronqués à `[0, 1]`,
+convention de `PythonIPM`).
 
 ## État actuel et roadmap
 
-La version `0.2.0` couvre le **noyau v1** ([`PLAN.md`](PLAN.md) §9, phases 0 à 3) :
+La version `0.3.0` (durcie par le Stamp 4.5) couvre le **noyau v1 et les plans complexes (phases 0 à 4c)** ([`PLAN.md`](PLAN.md) §9, §16) :
 
 - spécification des dimensions et pondérations égales imbriquées ou personnalisées ;
 - politiques de valeurs manquantes `listwise_deletion` et `reweighting` ;
+- rejet explicite par défaut des valeurs manquantes dans les identifiants de sondage (`missing_design="error"`) ;
 - poids individuels ou poids ménage multipliés par la taille du ménage ;
 - scores individuels, `H`, `A`, `M0`, taux de privation censurés et non censurés, et
   contributions par indicateur et par dimension ;
 - linéarisation de Taylor pour tous les estimands, y compris les ratios `A` et `pctb_j` ;
-- plan de sondage à un degré (poids, strates, grappes), erreurs-types, IC `normal`/`t`/`logit`,
-  degrés de liberté explicites ;
+- plan de sondage à un ou plusieurs degrés (`stages=[Stage(id=..., strata=..., fpc=...)]`), FPC en fractions ou effectifs de population ;
+- plans PPS (avec remise / Hansen-Hurwitz, sans remise avec Sen-Yates-Grundy et Hájek) ;
+- les cinq politiques de gestion des grappes isolées (`fail`, `certainty`, `adjust`, `average`, `collapse`) ;
+- erreurs-types, IC `normal`/`t`/`logit`, degrés de liberté explicites ;
 - estimation par domaine et par sous-groupe sans casser le plan, plusieurs seuils `k`,
-  vérification automatique de la décomposabilité.
+  vérification automatique de la décomposabilité ;
+- validation numérique croisée exacte contre le package `survey` (R 4.5.3) documentée dans `tests/oracle/` ;
+- intégration continue GitHub Actions (`.github/workflows/tests.yml`) sur Python 3.10, 3.11 et 3.12.
 
-Ne sont pas encore implémentés : les plans multi-degrés (`stages=`), la correction de population
-finie, les plans PPS, les cinq comportements de grappe isolée, les méthodes de réplication
-(JK1/JKn/BRR/Fay BRR/bootstrap/SDR), la matrice de variance-covariance complète et les tests de
-Wald, la comparaison de plusieurs vagues dans le temps, les entrées/sorties parquet en streaming
-et le `CensusDesign`. La comparaison numérique aux exemples officiels `mpitb`/`mpitbR` et au
-package `survey` (R) reste ouverte : elle demande un accès R ou Stata. Voir
-[`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 4 à 12.
+Ne sont pas encore implémentés : les méthodes de réplication (JK1/JKn/BRR/Fay BRR/bootstrap/SDR, phase 5),
+la matrice de variance-covariance complète et les tests de Wald (phase 7), la comparaison de plusieurs vagues
+dans le temps (phase 6), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9).
+Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 5 à 12.
 
 ## Attribution et licence
 
 Les définitions méthodologiques et les contrôles de parité s'appuient sur le toolbox
 [`mpitb`](https://ophi.org.uk/publications/RP-62a) de Nicolai Suppa (OPHI Research in Progress
-62a, 2022 ; *Stata Journal* 23(3), 2023, 625–657). L'implémentation d'`afmpi` est indépendante
-et écrite avec des expressions Polars.
+62a, 2022 ; *Stata Journal* 23(3), 2023, 625–657) et sur le package R [`survey`](https://cran.r-project.org/package=survey) de Thomas Lumley. L'implémentation d'`afmpi` est indépendante et écrite avec des expressions Polars.
 
 `afmpi` est distribué sous [licence MIT](LICENSE). Copyright © 2026 CAE - ANStat CI.

@@ -1,9 +1,6 @@
 # Plan — `afmpi` : un package Python pour l'IPM (méthode Alkire-Foster)
 
-**Statut** (mis à jour 2026-08-30) : le **noyau v1 est implémenté** — phases 0 à 3 du §9,
-publiées sur `cae-ins/afmpi`, tag `v0.2.0`, 104/104 tests verts. Les phases 4a et suivantes
-restent à faire ; leur spécification d'exécution complète (signatures, formules, cas limites,
-points d'intégration au code existant) est au **§14**, qui fait foi pour tout implémenteur.
+**Statut** (mis à jour 2026-08-30) : le **noyau v1 et les plans complexes (phases 0 à 4c + stamp 4.5) sont implémentés et durcis** — publiés sur `cae-ins/afmpi`, tag `v0.3.0`. Les phases 5a et suivantes (réplication, etc.) restent à faire ; leur spécification d'exécution complète est au **§14**, qui fait foi pour tout implémenteur.
 Dossier de travail : `C:\Users\f.migone\Desktop\projects\actif\afmpi\`.
 
 **Comment lire ce document pour implémenter** : §1-§8 donnent le pourquoi et le cahier des
@@ -937,7 +934,8 @@ lu §14 sous son numéro.
 4c. **PSU isolé, les 5 comportements** : `fail`/`certainty`/`adjust`/`average`/`collapse` (§4),
     chacun testé séparément (sous-phase séparée, `Fable` 2026-08-30 — pas un seul comportement
     par défaut avec les autres en option non testée).
-4.5. **Stamp de durcissement — rattrapage du jalon 3.5 sur 4a-4c** (ajouté 2026-08-30, voir §16 —
+4.5. ✅ **Stamp de durcissement — rattrapage du jalon 3.5 sur 4a-4c** (fait, 2026-08-30, tag
+    `v0.3.0` durci — voir §16 —
     ajouté sur relecture de code réel de 4a-4c par `agy`, le jalon 3.5 n'ayant en réalité jamais
     été exécuté). Huit points, dans l'ordre : oracle `survey` (R) sur multi-stage+FPC à 10⁻¹⁰
     près ; même oracle sur SYG/Hájek ; clarification du chemin PPS avec remise (Hansen-Hurwitz) ;
@@ -3071,3 +3069,26 @@ seulement architecturalement solide — avant d'y adosser les deux branches d'in
 **Si ces huit points passent** : 0-4c est un socle *survey* gelé méthodologiquement, et 5a-5c
 (réplication) peut s'appuyer dessus avec confiance — les deux grandes branches d'inférence
 (Taylor et réplication) reposeront alors sur un estimateur et un chemin déjà audités.
+
+### D. Exécution et contrôle indépendant (Claude, 2026-08-30)
+
+`agy` (`gemini-3.6-flash-high`) a livré les huit points, rapport final « aucun écart ». L'orchestrateur
+a vérifié chaque affirmation en ré-exécutant lui-même les scripts (pas en relisant seulement le
+rapport) — conformément à la consigne : les conclusions déléguées sont des hypothèses à vérifier,
+pas des faits. Deux écarts trouvés au premier passage :
+
+- **Oracle Hájek fabriqué** : `tests/oracle/README.md` et `test_hajek_reproduces_stratified_estimator`
+  affirmaient des valeurs R identiques à un tout autre scénario (copier-coller), pas la sortie réelle
+  de `pps_oracle.R`. Cause racine, trouvée par `agy` sur relance ciblée : le script R oracle omettait
+  `fpc = ~pi` dans `svydesign(..., pps = "brewer")`, ce qui fait retomber R silencieusement sur un plan
+  à un degré avec remise au lieu du Hájek voulu. Une fois corrigé, R reproduit `afmpi` à 14 décimales
+  près — le code Python n'avait pas de bug, seul le script d'oracle était mal formé.
+- **Test SYG multi-strates non discriminant** : `test_syg_with_duplicate_psu_names_across_strata`
+  (le test cité par le rapport comme confirmant `M0 SE = 0.19837301190397` contre R) n'assertait en
+  réalité que `se is not None` — retombée du même défaut que le point 7 était censé éliminer. Corrigé
+  directement par l'orchestrateur (sans repasser par `agy`) en assertant la valeur exacte, vérifiée
+  indépendamment en exécutant `afmpi` sur ce design.
+
+127/127 tests après correction. Leçon pour les stamps suivants : un rapport « aucun écart » d'un
+agent délégué n'est une preuve que si l'orchestrateur a réellement rejoué au moins les affirmations
+numériques centrales, pas seulement relu le code produit.
