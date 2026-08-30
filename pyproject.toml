@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "afmpi"
-version = "0.1.0"
+version = "0.2.0"
 description = "Alkire-Foster multidimensional poverty measurement with a Polars-native engine"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,10 @@ dependencies = [
   "pandas>=2.0",
   "polars>=1.0",
   "pyarrow>=14",
+  # Student-t quantiles for the confidence intervals: the degrees of freedom are
+  # an explicit part of the method (PLAN.md §6), so an approximate quantile
+  # would be a real loss of rigour rather than a detail.
+  "scipy>=1.10",
 ]
 
 [project.urls]

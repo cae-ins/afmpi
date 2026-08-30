@@ -1,16 +1,60 @@
-"""Polars-native Alkire-Foster point estimation."""
+"""Alkire-Foster estimation with a design-based Taylor variance.
+
+The pipeline follows PLAN.md §5: the deprivation engine turns raw indicators
+into ``c_i``, the estimand compiler turns ``c_i`` into ratios, the linearization
+stage turns ratios into influence values, and only then does the design get
+involved. Nothing in this module computes a variance formula of its own.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from math import isfinite
 from numbers import Real
 
 import pandas as pd
 import polars as pl
 
-from .results import EstimationResult, InputKind
+from . import deprivation, domain as domain_module, estimands as estimands_module
+from . import linearization
+from .deprivation import PSU, STRATUM, DeprivationMatrix
+from .results import EstimationResult
 from .specification import Specification
 from .survey_design import SurveyDesign
+from .variance import (
+    CI_METHODS,
+    coefficient_of_variation,
+    confidence_interval,
+    design_degrees,
+    standard_error,
+    taylor_variance,
+)
+
+#: Tolerance of the decomposability check ``sum_l phi_l * M0_l == M0``.
+DECOMPOSITION_TOLERANCE = 1e-9
+
+_CLUSTER_WEIGHT = "__afmpi_cluster_weight"
+_CLUSTER_ROWS = "__afmpi_cluster_rows"
+
+_ESTIMATE_SCHEMA = {
+    "measure": pl.String,
+    "indicator": pl.String,
+    "dimension": pl.String,
+    "weight": pl.Float64,
+    "k": pl.Float64,
+    "over": pl.String,
+    "subgroup": pl.String,
+    "est": pl.Float64,
+    "se": pl.Float64,
+    "lci": pl.Float64,
+    "uci": pl.Float64,
+    "cv": pl.Float64,
+    "df": pl.Int64,
+    "psus": pl.Int64,
+    "strata": pl.Int64,
+    "obs": pl.Int64,
+    "population": pl.Float64,
+}
 
 
 def estimate(
@@ -18,311 +62,292 @@ def estimate(
     spec: Specification,
     design: SurveyDesign | None = None,
     *,
-    k: float = 1 / 3,
+    k: float | Sequence[float] = 1 / 3,
+    over: str | Sequence[str] | None = None,
+    domain: str | pl.Expr | None = None,
+    ci_method: str = "logit",
+    level: float = 0.95,
+    check_decomposability: bool = True,
 ) -> EstimationResult:
-    """Estimate one Alkire-Foster adjusted headcount ratio.
+    """Estimate Alkire-Foster measures with design-based standard errors.
 
-    The implemented identities are:
-
-    ``c_i = sum_j(w_j * g_ij)``, ``poor_i = 1(c_i >= k)``,
-    ``c_i(k) = c_i * poor_i``,
-    ``H = sum_i(n_i * poor_i) / sum_i(n_i)``,
-    ``A = sum_i(n_i * c_i(k)) / sum_i(n_i * poor_i)``, and
-    ``M0 = H * A = sum_i(n_i * c_i(k)) / sum_i(n_i)``.
+    Parameters
+    ----------
+    df:
+        One row per unit, with 0/1 or boolean deprivation indicators.
+    spec:
+        Dimensions, indicators, Alkire-Foster weights and missing-value policy.
+    design:
+        Weights, strata and PSUs. ``None`` means unweighted, one row per cluster.
+    k:
+        Poverty cutoff, or several of them for a robustness table. Cutoffs are
+        **fractions between 0 and 1**, not percentages: ``1/3``, not ``33``.
+    over:
+        One or several grouping variables. Each produces its own one-way
+        breakdown, not a cross-tabulation, and the design is preserved for every
+        subgroup (see :mod:`afmpi.domain`).
+    domain:
+        A boolean expression restricting the estimate to a subpopulation
+        *without* filtering the rows out of the design.
+    ci_method:
+        ``"logit"`` (default, bounds respected by construction, the convention
+        of ``svyciprop``), ``"t"`` or ``"normal"`` (symmetric, truncated to
+        ``[0, 1]``, the convention of ``PythonIPM``).
+    level:
+        Confidence level of the intervals.
+    check_decomposability:
+        Verify ``sum_l phi_l * M0_l == M0`` over each ``over`` variable.
     """
 
-    if not isinstance(spec, Specification):
-        raise TypeError("spec must be a Specification")
-    indicators = spec.indicators  # also verifies that the specification is configured
     if design is None:
         design = SurveyDesign()
-    if not isinstance(design, SurveyDesign):
-        raise TypeError("design must be a SurveyDesign or None")
-    cutoff = _validate_cutoff(k)
+    cutoffs = _validate_cutoffs(k)
+    variables = _validate_over(over)
+    if ci_method not in CI_METHODS:
+        raise ValueError(f"ci_method must be one of {CI_METHODS}; got {ci_method!r}")
 
-    frame, input_kind = _to_polars(df)
-    if frame.height == 0:
-        raise ValueError("df must contain at least one observation")
-    _validate_required_columns(frame, indicators, design)
-    frame = _validate_and_normalize_indicators(frame, indicators)
-    frame = _add_population_weight(frame, design)
-
-    initial_observations = frame.height
-    frame, score_exprs = _apply_missing_policy(frame, spec)
-    if frame.height == 0:
-        raise ValueError("no observations remain after applying missing_policy")
-
-    scored = frame.select(
-        pl.col("__afmpi_population_weight"),
-        score_exprs["score"].alias("score"),
-        *[
-            expression.alias(f"__afmpi_contribution_{index}")
-            for index, expression in enumerate(score_exprs["weighted_deprivations"])
-        ],
-    ).with_columns(
-        (pl.col("score") >= cutoff).alias("poor"),
-    ).with_columns(
-        pl.when(pl.col("poor"))
-        .then(pl.col("score"))
-        .otherwise(0.0)
-        .alias("censored_score")
+    matrix = deprivation.build(
+        df,
+        spec,
+        design,
+        required_columns=tuple(variables) + design.design_columns,
+    )
+    return _estimate_from_matrix(
+        matrix,
+        cutoffs=cutoffs,
+        variables=variables,
+        domain=domain,
+        ci_method=ci_method,
+        level=level,
+        check_decomposability=check_decomposability,
     )
 
-    totals = scored.select(
-        pl.col("__afmpi_population_weight").sum().alias("population"),
-        (pl.col("__afmpi_population_weight") * pl.col("poor").cast(pl.Float64))
-        .sum()
-        .alias("poor_population"),
-        (pl.col("__afmpi_population_weight") * pl.col("censored_score"))
-        .sum()
-        .alias("weighted_censored_score"),
-    ).row(0, named=True)
-    population = float(totals["population"])
-    poor_population = float(totals["poor_population"])
-    weighted_censored_score = float(totals["weighted_censored_score"])
-    H = poor_population / population
-    A = weighted_censored_score / poor_population if poor_population > 0 else 0.0
-    M0 = weighted_censored_score / population
 
-    indicator_results = _indicator_results(frame, scored, spec, population, M0)
-    dimension_results = _dimension_results(indicator_results, spec)
-    scores = scored.select(
-        pl.col("score"),
-        pl.col("poor"),
-        pl.col("censored_score"),
-        pl.col("__afmpi_population_weight").alias("population_weight"),
+def _estimate_from_matrix(
+    matrix: DeprivationMatrix,
+    *,
+    cutoffs: tuple[float, ...],
+    variables: tuple[str, ...],
+    domain: str | pl.Expr | None,
+    ci_method: str,
+    level: float,
+    check_decomposability: bool,
+) -> EstimationResult:
+    frame = matrix.frame
+    spec = matrix.spec
+
+    base = domain_module.POPULATION
+    if domain is not None:
+        base = domain_module.from_expression(domain)
+        domain_module.validate(frame, base)
+    base_weight = base.weight()
+
+    universe = frame.select(STRATUM, PSU).unique(maintain_order=True)
+    subgroups = {variable: domain_module.levels(frame, variable) for variable in variables}
+    rows: list[dict[str, object]] = []
+    decomposition: list[dict[str, object]] = []
+
+    for cutoff in cutoffs:
+        estimands = estimands_module.build(spec, cutoff)
+        keys = tuple(item.key for item in estimands)
+
+        national_sums = linearization.cluster_sums(frame, estimands, base_weight)
+        # The whole estimated population -- the domain itself when one is set --
+        # is the reference row, with no ``over``/``subgroup`` label; the domain
+        # it stands for is carried by the result object instead.
+        national = _context_rows(
+            national_sums, estimands, keys, cutoff, None, None, ci_method, level
+        )
+        rows.extend(national)
+        national_population = national[0]["population"] if national else 0.0
+        national_m0 = _pick(national, "M0")
+
+        for variable in variables:
+            cells = linearization.cluster_sums(
+                frame,
+                estimands,
+                base_weight,
+                group_columns=(STRATUM, PSU, variable),
+            )
+            share_total = 0.0
+            weighted_m0 = 0.0
+            for subgroup in subgroups[variable]:
+                sums = _align(cells, universe, variable, subgroup)
+                subgroup_rows = _context_rows(
+                    sums, estimands, keys, cutoff, variable, subgroup, ci_method, level
+                )
+                rows.extend(subgroup_rows)
+                if national_population:
+                    share = subgroup_rows[0]["population"] / national_population
+                    share_total += share
+                    subgroup_m0 = _pick(subgroup_rows, "M0")
+                    if subgroup_m0 is not None:
+                        weighted_m0 += share * subgroup_m0
+            if national_m0 is not None:
+                decomposition.append(
+                    {
+                        "k": cutoff,
+                        "over": variable,
+                        "shares": share_total,
+                        "M0": national_m0,
+                        "decomposed_M0": weighted_m0,
+                        "error": abs(weighted_m0 - national_m0),
+                    }
+                )
+
+    estimates = pl.DataFrame(rows, schema=_ESTIMATE_SCHEMA)
+    decomposition_frame = pl.DataFrame(
+        decomposition,
+        schema={
+            "k": pl.Float64,
+            "over": pl.String,
+            "shares": pl.Float64,
+            "M0": pl.Float64,
+            "decomposed_M0": pl.Float64,
+            "error": pl.Float64,
+        },
     )
+    if check_decomposability and decomposition_frame.height:
+        _assert_decomposable(decomposition_frame)
 
     return EstimationResult(
-        k=cutoff,
-        observations=frame.height,
-        excluded_observations=initial_observations - frame.height,
-        population=population,
-        H=H,
-        A=A,
-        M0=M0,
-        _indicator_results=indicator_results,
-        _dimension_results=dimension_results,
-        _scores=scores,
-        _input_kind=input_kind,
+        _estimates=estimates,
+        _decomposition=decomposition_frame,
+        _matrix=matrix,
+        _cutoffs=cutoffs,
+        _over=variables,
+        _domain=(base.over, base.subgroup) if not base.is_population else None,
+        _ci_method=ci_method,
+        _level=level,
+        observations=matrix.observations,
+        excluded_observations=matrix.excluded_observations,
     )
 
 
-def _to_polars(df: pd.DataFrame | pl.DataFrame) -> tuple[pl.DataFrame, InputKind]:
-    if isinstance(df, pl.DataFrame):
-        return df, "polars"
-    if isinstance(df, pd.DataFrame):
-        return pl.from_pandas(df, include_index=False, rechunk=False), "pandas"
-    raise TypeError("df must be a pandas.DataFrame or polars.DataFrame")
+def _context_rows(
+    sums: pl.DataFrame,
+    estimands: tuple[estimands_module.RatioEstimand, ...],
+    keys: tuple[str, ...],
+    cutoff: float,
+    over: str | None,
+    subgroup: str | None,
+    ci_method: str,
+    level: float,
+) -> list[dict[str, object]]:
+    """Point estimates, variance and intervals for one (k, domain) context."""
 
+    ratios = linearization.totals_from_clusters(sums, estimands)
+    influence = linearization.cluster_influence(sums, ratios)
+    degrees = design_degrees(influence)
+    variances = taylor_variance(influence, keys, degrees)
 
-def _validate_cutoff(k: float) -> float:
-    if isinstance(k, bool) or not isinstance(k, Real):
-        raise TypeError("k must be a real number between 0 and 1")
-    cutoff = float(k)
-    if not isfinite(cutoff) or not 0 <= cutoff <= 1:
-        raise ValueError("k must be finite and between 0 and 1, inclusive")
-    return cutoff
+    totals = sums.select(
+        pl.col(_CLUSTER_WEIGHT).sum().alias("population"),
+        pl.col(_CLUSTER_ROWS).sum().alias("obs"),
+    ).row(0, named=True)
+    population = float(totals["population"] or 0.0)
+    observations = int(totals["obs"] or 0)
 
-
-def _validate_required_columns(
-    frame: pl.DataFrame,
-    indicators: tuple[str, ...],
-    design: SurveyDesign,
-) -> None:
-    missing = sorted(set(indicators + design.required_columns) - set(frame.columns))
-    if missing:
-        raise ValueError(f"columns absent from df: {missing}")
-
-
-def _validate_and_normalize_indicators(
-    frame: pl.DataFrame,
-    indicators: tuple[str, ...],
-) -> pl.DataFrame:
-    normalized: list[pl.Expr] = []
-    for indicator in indicators:
-        dtype = frame.schema[indicator]
-        if dtype == pl.Boolean:
-            normalized.append(pl.col(indicator))
-            continue
-        if not dtype.is_numeric():
-            raise TypeError(
-                f"indicator {indicator!r} must be boolean or numeric 0/1; got {dtype}"
-            )
-        expression = pl.col(indicator)
-        if dtype.is_float():
-            expression = expression.fill_nan(None)
-        invalid = (
-            frame.select(expression.drop_nulls().filter(~expression.is_in([0, 1])).unique())
-            .to_series()
-            .to_list()
+    rows: list[dict[str, object]] = []
+    for ratio in ratios:
+        estimand = ratio.estimand
+        value = ratio.value
+        se = standard_error(variances[estimand.key])
+        lower, upper = confidence_interval(
+            value, se, degrees.df, method=ci_method, level=level
         )
-        if invalid:
-            raise ValueError(
-                f"indicator {indicator!r} contains values other than 0/1: {invalid[:5]}"
-            )
-        normalized.append(expression.alias(indicator))
-    return frame.with_columns(normalized)
-
-
-def _add_population_weight(frame: pl.DataFrame, design: SurveyDesign) -> pl.DataFrame:
-    expressions: list[pl.Expr] = []
-    for column in design.required_columns:
-        dtype = frame.schema[column]
-        if not dtype.is_numeric() or dtype == pl.Boolean:
-            raise TypeError(f"survey column {column!r} must be numeric; got {dtype}")
-        value = pl.col(column).cast(pl.Float64)
-        invalid = frame.select(
-            (value.is_null() | value.is_nan() | ~value.is_finite()).any()
-        ).item()
-        if invalid:
-            raise ValueError(f"survey column {column!r} contains missing or non-finite values")
-        if column == design.household_size:
-            bad_sign = frame.select((value <= 0).any()).item()
-            message = "strictly positive"
-        else:
-            bad_sign = frame.select((value < 0).any()).item()
-            message = "non-negative"
-        if bad_sign:
-            raise ValueError(f"survey column {column!r} must be {message}")
-        expressions.append(value)
-
-    population_weight = pl.lit(1.0)
-    for expression in expressions:
-        population_weight = population_weight * expression
-    result = frame.with_columns(population_weight.alias("__afmpi_population_weight"))
-    total = result.select(pl.col("__afmpi_population_weight").sum()).item()
-    if total is None or not isfinite(float(total)) or total <= 0:
-        raise ValueError("effective population weights must have a positive finite sum")
-    return result
-
-
-def _apply_missing_policy(
-    frame: pl.DataFrame,
-    spec: Specification,
-) -> tuple[pl.DataFrame, dict[str, pl.Expr | list[pl.Expr]]]:
-    weights = spec.indicator_weights
-    indicators = spec.indicators
-
-    if spec.missing_policy == "listwise_deletion":
-        complete = pl.all_horizontal([pl.col(item).is_not_null() for item in indicators])
-        filtered = frame.filter(complete)
-        weighted = [
-            pl.col(item).cast(pl.Float64) * weights[item] for item in indicators
-        ]
-        return filtered, {"score": pl.sum_horizontal(weighted), "weighted_deprivations": weighted}
-
-    observed_weight = pl.sum_horizontal(
-        [
-            pl.when(pl.col(item).is_not_null()).then(weights[item]).otherwise(0.0)
-            for item in indicators
-        ]
-    )
-    filtered = frame.filter(observed_weight > 0)
-    weighted = [
-        pl.when(pl.col(item).is_not_null())
-        .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
-        .otherwise(0.0)
-        for item in indicators
-    ]
-    return filtered, {"score": pl.sum_horizontal(weighted), "weighted_deprivations": weighted}
-
-
-def _indicator_results(
-    frame: pl.DataFrame,
-    scored: pl.DataFrame,
-    spec: Specification,
-    population: float,
-    M0: float,
-) -> pl.DataFrame:
-    indicators = spec.indicators
-    weights = spec.indicator_weights
-    combined = pl.concat(
-        [
-            frame.select(
-                pl.col("__afmpi_population_weight"),
-                *[pl.col(item) for item in indicators],
-            ),
-            scored.select(
-                pl.col("poor"),
-                *[pl.col(f"__afmpi_contribution_{i}") for i in range(len(indicators))],
-            ),
-        ],
-        how="horizontal",
-    )
-
-    aggregations: list[pl.Expr] = []
-    for index, indicator in enumerate(indicators):
-        observed = pl.col(indicator).is_not_null()
-        deprivation = pl.col(indicator).cast(pl.Float64).fill_null(0.0)
-        aggregations.extend(
-            (
-                pl.when(observed)
-                .then(pl.col("__afmpi_population_weight"))
-                .otherwise(0.0)
-                .sum()
-                .alias(f"observed_population_{index}"),
-                (pl.col("__afmpi_population_weight") * deprivation)
-                .sum()
-                .alias(f"deprived_{index}"),
-                (
-                    pl.col("__afmpi_population_weight")
-                    * deprivation
-                    * pl.col("poor").cast(pl.Float64)
-                )
-                .sum()
-                .alias(f"censored_deprived_{index}"),
-                (
-                    pl.col("__afmpi_population_weight")
-                    * pl.col(f"__afmpi_contribution_{index}")
-                    * pl.col("poor").cast(pl.Float64)
-                )
-                .sum()
-                .alias(f"absolute_numerator_{index}"),
-            )
-        )
-    totals = combined.select(aggregations).row(0, named=True)
-
-    rows: list[dict[str, str | float | None]] = []
-    for index, indicator in enumerate(indicators):
-        indicator_population = float(totals[f"observed_population_{index}"])
-        if indicator_population > 0:
-            H_j = float(totals[f"deprived_{index}"]) / indicator_population
-            CH_j = float(totals[f"censored_deprived_{index}"]) / indicator_population
-        else:
-            H_j = None
-            CH_j = None
-        actb_j = float(totals[f"absolute_numerator_{index}"]) / population
         rows.append(
             {
-                "dimension": spec.dimension_of(indicator),
-                "indicator": indicator,
-                "weight": weights[indicator],
-                "H_j": H_j,
-                "CH_j": CH_j,
-                "actb_j": actb_j,
-                "pctb_j": actb_j / M0 if M0 > 0 else None,
+                "measure": estimand.measure,
+                "indicator": estimand.indicator,
+                "dimension": estimand.dimension,
+                "weight": estimand.weight,
+                "k": cutoff,
+                "over": over,
+                "subgroup": subgroup,
+                "est": value,
+                "se": se,
+                "lci": lower,
+                "uci": upper,
+                "cv": coefficient_of_variation(value, se),
+                "df": degrees.df,
+                "psus": degrees.psus,
+                "strata": degrees.strata,
+                "obs": observations,
+                "population": population,
             }
         )
-    return pl.DataFrame(rows)
+    return rows
 
 
-def _dimension_results(
-    indicator_results: pl.DataFrame,
-    spec: Specification,
+def _align(
+    cells: pl.DataFrame,
+    universe: pl.DataFrame,
+    variable: str,
+    subgroup: str,
 ) -> pl.DataFrame:
-    dimensions = spec.dimension_weights
-    return (
-        indicator_results.group_by("dimension", maintain_order=True)
-        .agg(
-            pl.col("actb_j").sum().alias("actb_dim"),
-            pl.when(pl.col("pctb_j").count() > 0)
-            .then(pl.col("pctb_j").sum())
-            .otherwise(None)
-            .alias("pctb_dim"),
-        )
-        .with_columns(
-            pl.col("dimension").replace_strict(dimensions).alias("weight")
-        )
-        .select("dimension", "weight", "actb_dim", "pctb_dim")
+    """Restrict per-cluster sums to one level, keeping every design cluster.
+
+    Clusters with no observation in the subgroup are kept with zero sums: they
+    contribute nothing to the estimate but they still belong to their stratum,
+    which is exactly what keeps the variance right (PLAN.md §6).
+    """
+
+    selected = cells.filter(pl.col(variable).cast(pl.String) == pl.lit(subgroup)).drop(
+        variable
     )
+    value_columns = [column for column in selected.columns if column not in (STRATUM, PSU)]
+    aligned = universe.join(selected, on=[STRATUM, PSU], how="left")
+    return aligned.with_columns(
+        [pl.col(column).fill_null(0).alias(column) for column in value_columns]
+    )
+
+
+def _pick(rows: list[dict[str, object]], measure: str) -> float | None:
+    for row in rows:
+        if row["measure"] == measure:
+            return row["est"]
+    return None
+
+
+def _assert_decomposable(frame: pl.DataFrame) -> None:
+    worst = frame.filter(pl.col("error") == pl.col("error").max()).row(0, named=True)
+    if worst["error"] > DECOMPOSITION_TOLERANCE:
+        raise ValueError(
+            "decomposability check failed: sum_l phi_l * M0_l = "
+            f"{worst['decomposed_M0']!r} but M0 = {worst['M0']!r} "
+            f"(over={worst['over']!r}, k={worst['k']!r}, "
+            f"difference {worst['error']:.3e} > {DECOMPOSITION_TOLERANCE:.0e})"
+        )
+
+
+def _validate_cutoffs(k: float | Sequence[float]) -> tuple[float, ...]:
+    values = [k] if isinstance(k, (Real, bool)) else list(k)
+    if not values:
+        raise ValueError("k must contain at least one cutoff")
+    cutoffs: list[float] = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise TypeError("k must be a real number between 0 and 1")
+        cutoff = float(value)
+        if not isfinite(cutoff) or not 0 <= cutoff <= 1:
+            raise ValueError("k must be finite and between 0 and 1, inclusive")
+        cutoffs.append(cutoff)
+    if len(set(cutoffs)) != len(cutoffs):
+        raise ValueError(f"k contains duplicate cutoffs: {cutoffs}")
+    return tuple(cutoffs)
+
+
+def _validate_over(over: str | Sequence[str] | None) -> tuple[str, ...]:
+    if over is None:
+        return ()
+    variables = [over] if isinstance(over, str) else list(over)
+    for variable in variables:
+        if not isinstance(variable, str) or not variable.strip():
+            raise ValueError("over must contain non-empty column names")
+    if len(set(variables)) != len(variables):
+        raise ValueError(f"over contains duplicate variables: {variables}")
+    return tuple(variables)
+
+
+__all__ = ["DECOMPOSITION_TOLERANCE", "estimate"]
