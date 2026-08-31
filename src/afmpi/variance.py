@@ -487,6 +487,11 @@ def _pps_variance(
             rows = strat_df.to_dicts()
             m_h = len(rows)
             if m_h < 2:
+                if design.lonely_psu in ("adjust", "average"):
+                    raise ValueError(
+                        f"lonely_psu={design.lonely_psu!r} is not supported for "
+                        "PPS without replacement; use 'fail', 'certainty', or 'collapse'"
+                    )
                 pi_1 = float(rows[0]["__pi"])
                 if pi_1 == 1.0 or design.lonely_psu == "certainty":
                     continue
@@ -543,6 +548,11 @@ def _pps_variance(
             rows = strat_df.to_dicts()
             m_h = len(rows)
             if m_h < 2:
+                if design.lonely_psu in ("adjust", "average"):
+                    raise ValueError(
+                        f"lonely_psu={design.lonely_psu!r} is not supported for "
+                        "PPS without replacement; use 'fail', 'certainty', or 'collapse'"
+                    )
                 pi_1 = float(rows[0]["__pi"])
                 if pi_1 == 1.0 or design.lonely_psu == "certainty":
                     continue
@@ -1056,6 +1066,11 @@ def _pps_vcov(
             rows = strat_df.to_dicts()
             m_h = len(rows)
             if m_h < 2:
+                if design.lonely_psu in ("adjust", "average"):
+                    raise ValueError(
+                        f"lonely_psu={design.lonely_psu!r} is not supported for "
+                        "PPS without replacement; use 'fail', 'certainty', or 'collapse'"
+                    )
                 pi_1 = float(rows[0]["__pi"])
                 if pi_1 == 1.0 or design.lonely_psu == "certainty":
                     continue
@@ -1098,8 +1113,11 @@ def _pps_vcov(
 
                         coeff = (pi_cd - pi_c * pi_d) / pi_cd
                         v_h += -0.5 * coeff * (t_c_k1 - t_d_k1) * (t_c_k2 - t_d_k2)
-                res[(k1, k2)] += v_h
-                res[(k2, k1)] += v_h
+                if k1 == k2:
+                    res[(k1, k1)] += v_h
+                else:
+                    res[(k1, k2)] += v_h
+                    res[(k2, k1)] += v_h
 
         for k1 in keys:
             for k2 in keys:
@@ -1114,6 +1132,11 @@ def _pps_vcov(
             rows = strat_df.to_dicts()
             m_h = len(rows)
             if m_h < 2:
+                if design.lonely_psu in ("adjust", "average"):
+                    raise ValueError(
+                        f"lonely_psu={design.lonely_psu!r} is not supported for "
+                        "PPS without replacement; use 'fail', 'certainty', or 'collapse'"
+                    )
                 pi_1 = float(rows[0]["__pi"])
                 if pi_1 == 1.0 or design.lonely_psu == "certainty":
                     continue
@@ -1132,8 +1155,11 @@ def _pps_vcov(
                     * (float(r[k2]) - t_star_k2)
                     for r in rows
                 )
-                res[(k1, k2)] += v_h
-                res[(k2, k1)] += v_h
+                if k1 == k2:
+                    res[(k1, k1)] += v_h
+                else:
+                    res[(k1, k2)] += v_h
+                    res[(k2, k1)] += v_h
 
         for k1 in keys:
             for k2 in keys:

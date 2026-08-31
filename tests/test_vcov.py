@@ -8,6 +8,7 @@ import pytest
 
 from afmpi import (
     Design,
+    PPSDesign,
     ReplicateDesign,
     Specification,
     SurveyDesign,
@@ -107,6 +108,91 @@ def test_diag_vcov_equals_se_squared_census(sample_data, spec):
     for row in vcov_table.to_dicts():
         term = row["term"]
         assert row[term] == 0.0
+
+
+def test_diag_vcov_equals_se_squared_pps_hajek(spec):
+    """Test 1d: diag(vcov()) == se()**2 EXACTLY for PPS Hájek design."""
+    pps_data = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
+            "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
+            "weight": [10.0, 10.0, 5.0, 5.0, 4.0, 4.0, 2.0, 2.0],
+            "pi": [0.1, 0.1, 0.2, 0.2, 0.25, 0.25, 0.5, 0.5],
+            "d1_i1": [1, 1, 0, 0, 1, 1, 0, 0],
+            "d1_i2": [0, 1, 0, 1, 1, 0, 1, 0],
+            "d2_i3": [1, 0, 1, 0, 0, 1, 0, 1],
+        }
+    )
+    design = SurveyDesign(
+        strata="stratum",
+        psu="psu",
+        weights="weight",
+        pps=PPSDesign(
+            method="without_replacement", inclusion_probability="pi", variance="hajek"
+        ),
+    )
+    res = estimate(pps_data, spec, design, k=1 / 3)
+    vcov_table = res.vcov(measures=("H", "A", "M0"))
+    estimates_table = res.estimates().filter(pl.col("measure").is_in(["H", "A", "M0"]))
+    se_map = dict(
+        zip(
+            estimates_table["measure"].to_list(),
+            estimates_table["se"].to_list(),
+            strict=True,
+        )
+    )
+    for row in vcov_table.to_dicts():
+        term = row["term"]
+        diag_val = row[term]
+        se_val = se_map[term]
+        np.testing.assert_allclose(sqrt(diag_val), se_val, rtol=1e-12, atol=1e-12)
+
+
+def test_diag_vcov_equals_se_squared_pps_syg(spec):
+    """Test 1e: diag(vcov()) == se()**2 EXACTLY for PPS Sen-Yates-Grundy design."""
+    pps_data = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
+            "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
+            "weight": [10.0, 10.0, 5.0, 5.0, 4.0, 4.0, 2.0, 2.0],
+            "pi": [0.1, 0.1, 0.2, 0.2, 0.25, 0.25, 0.5, 0.5],
+            "d1_i1": [1, 1, 0, 0, 1, 1, 0, 0],
+            "d1_i2": [0, 1, 0, 1, 1, 0, 1, 0],
+            "d2_i3": [1, 0, 1, 0, 0, 1, 0, 1],
+        }
+    )
+    jp = pl.DataFrame(
+        [
+            {"stratum": "1", "psu_a": "101", "psu_b": "102", "pi_ab": 0.015},
+            {"stratum": "2", "psu_a": "201", "psu_b": "202", "pi_ab": 0.10},
+        ]
+    )
+    design = SurveyDesign(
+        strata="stratum",
+        psu="psu",
+        weights="weight",
+        pps=PPSDesign(
+            method="without_replacement",
+            inclusion_probability="pi",
+            joint_probability=jp,
+            variance="sen_yates_grundy",
+        ),
+    )
+    res = estimate(pps_data, spec, design, k=1 / 3)
+    vcov_table = res.vcov(measures=("H", "A", "M0"))
+    estimates_table = res.estimates().filter(pl.col("measure").is_in(["H", "A", "M0"]))
+    se_map = dict(
+        zip(
+            estimates_table["measure"].to_list(),
+            estimates_table["se"].to_list(),
+            strict=True,
+        )
+    )
+    for row in vcov_table.to_dicts():
+        term = row["term"]
+        diag_val = row[term]
+        se_val = se_map[term]
+        np.testing.assert_allclose(sqrt(diag_val), se_val, rtol=1e-12, atol=1e-12)
 
 
 def test_vcov_symmetric_and_positive_semidefinite(sample_data, spec):

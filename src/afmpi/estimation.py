@@ -154,6 +154,40 @@ def estimate(
     """
 
     if lazy:
+        if cot_year is not None and tvar is None:
+            raise ValueError("cot_year specified without tvar")
+
+        frame_obj, _ = backend.to_frame(df)
+        schema_cols = (
+            frame_obj.collect_schema().names()
+            if isinstance(frame_obj, pl.LazyFrame)
+            else (list(frame_obj.columns) if hasattr(frame_obj, "columns") else [])
+        )
+        if tvar is not None:
+            if schema_cols and tvar not in schema_cols:
+                raise ValueError(f"tvar column {tvar!r} is absent from df")
+            raise NotImplementedError(
+                f"Changes over time (tvar={tvar!r}) are not supported on lazy or streaming "
+                "execution paths; use in-memory execution (lazy=False) for "
+                "change_over_time / .changes()."
+            )
+        if cot_year is not None:
+            if schema_cols and cot_year not in schema_cols:
+                raise ValueError(f"cot_year column {cot_year!r} is absent from df")
+            raise NotImplementedError(
+                f"Changes over time (cot_year={cot_year!r}) are not supported on lazy or "
+                "streaming execution paths; use in-memory execution (lazy=False) for "
+                "change_over_time / .changes()."
+            )
+        if panel_id is not None:
+            if schema_cols and panel_id not in schema_cols:
+                raise ValueError(f"panel_id column {panel_id!r} is absent from df")
+            raise NotImplementedError(
+                f"Panel estimation (panel_id={panel_id!r}) is not supported on lazy or "
+                "streaming execution paths; use in-memory execution (lazy=False) for "
+                "panel analysis / .changes()."
+            )
+
         return LazyEstimation(
             df=df,
             spec=spec,
@@ -282,19 +316,19 @@ def _execute_estimation(
 
     if resources is not None and resources.max_threads is not None:
         requested = str(resources.max_threads)
-        existing = os.environ.get("POLARS_MAX_THREADS")
         # Polars reads POLARS_MAX_THREADS once, at the first Polars operation of the
         # process -- there is no per-call thread pool. `setdefault` avoids clobbering
-        # a value another `estimate()` call (or the user) already set; either way, if
-        # this is not the first Polars operation in this process, the setting below
-        # is silently ignored by Polars, hence the warning rather than a false promise.
+        # a value another `estimate()` call (or the user) already set.
         os.environ.setdefault("POLARS_MAX_THREADS", requested)
-        if existing not in (None, requested):
+        actual_threads = pl.thread_pool_size()
+        if actual_threads != resources.max_threads:
             warnings.warn(
                 f"ExecutionConfig(max_threads={resources.max_threads}) has no effect: "
-                f"POLARS_MAX_THREADS is already set to {existing!r} for this process. "
+                f"Polars thread pool is already initialized with {actual_threads} threads. "
                 "Polars' thread pool is global to the process and read once, at the "
-                "first Polars operation -- it cannot be reconfigured per call.",
+                "first Polars operation -- it cannot be reconfigured per call. "
+                "Use ExecutionConfig(max_threads=N, isolated_process=True) for strict "
+                "thread isolation.",
                 stacklevel=2,
             )
 
@@ -346,6 +380,40 @@ def _execute_estimation(
             batch_size=batch_size_override,
             projected_columns=projected_columns,
             input_kind=input_kind,
+        )
+
+    # Validate time and panel variables on lazy path before execution
+    if cot_year is not None and tvar is None:
+        raise ValueError("cot_year specified without tvar")
+
+    schema_cols = (
+        frame_obj.collect_schema().names()
+        if isinstance(frame_obj, pl.LazyFrame)
+        else (frame_obj.columns if isinstance(frame_obj, pl.DataFrame) else [])
+    )
+    if tvar is not None:
+        if schema_cols and tvar not in schema_cols:
+            raise ValueError(f"tvar column {tvar!r} is absent from df")
+        raise NotImplementedError(
+            f"Changes over time (tvar={tvar!r}) are not supported on lazy or streaming "
+            "execution paths; use in-memory execution (lazy=False) for "
+            "change_over_time / .changes()."
+        )
+    if cot_year is not None:
+        if schema_cols and cot_year not in schema_cols:
+            raise ValueError(f"cot_year column {cot_year!r} is absent from df")
+        raise NotImplementedError(
+            f"Changes over time (cot_year={cot_year!r}) are not supported on lazy or streaming "
+            "execution paths; use in-memory execution (lazy=False) for "
+            "change_over_time / .changes()."
+        )
+    if panel_id is not None:
+        if schema_cols and panel_id not in schema_cols:
+            raise ValueError(f"panel_id column {panel_id!r} is absent from df")
+        raise NotImplementedError(
+            f"Panel estimation (panel_id={panel_id!r}) is not supported on lazy or streaming "
+            "execution paths; use in-memory execution (lazy=False) for "
+            "panel analysis / .changes()."
         )
 
     return _estimate_lazy(
@@ -406,6 +474,12 @@ def _estimate_lazy(
     lf_scored = missing.apply_transform(lf, spec)
     lf_scored = _add_design_identifiers_lazy(lf_scored, design)
 
+    active_cond = (
+        pl.col("__afmpi_active")
+        if "__afmpi_active" in lf_scored.collect_schema().names()
+        else pl.lit(True)
+    )
+
     if domain is not None:
         if isinstance(domain, str):
             domain_expr = pl.sql_expr(domain)
@@ -413,13 +487,24 @@ def _estimate_lazy(
             domain_expr = domain
         else:
             raise TypeError("domain must be a string expression or a polars expression")
-        domain_cond = domain_expr
-        domain_weight = pl.col(deprivation.WEIGHT) * pl.when(domain_cond).then(1.0).otherwise(
-            0.0
-        )
+        domain_cond = domain_expr & active_cond
     else:
-        domain_cond = None
-        domain_weight = pl.col(deprivation.WEIGHT)
+        domain_cond = active_cond
+
+    domain_weight = (
+        pl.col(deprivation.WEIGHT) * domain_cond.cast(pl.Float64)
+        if domain_cond is not None
+        else pl.col(deprivation.WEIGHT)
+    )
+
+    missing_audit_exprs = [
+        pl.len().alias("__rows_in"),
+        active_cond.cast(pl.Int64).sum().alias("__rows_out"),
+        *[
+            pl.col(ind).is_null().cast(pl.Int64).sum().alias(f"__missing_{ind}")
+            for ind in spec.indicators
+        ],
+    ]
 
     all_k_estimands: list[estimands_module.RatioEstimand] = []
     k_estimand_map: dict[float, tuple[estimands_module.RatioEstimand, ...]] = {}
@@ -443,6 +528,7 @@ def _estimate_lazy(
     if design.variance_path == "census":
         plan_nat = lf_scored.select(
             *linearization._totals_exprs(all_k_estimands, domain_weight),
+            *missing_audit_exprs,
             domain_weight.sum().alias("__afmpi_cluster_weight"),
             (domain_weight > 0).sum().alias("__afmpi_cluster_rows"),
         )
@@ -458,7 +544,11 @@ def _estimate_lazy(
         survey_design: SurveyDesign = design  # type: ignore[assignment]
         group_cols = _stage_group_columns_lazy(lf_scored, survey_design)
         plan_nat = linearization.cluster_sums_lazy(
-            lf_scored, all_k_estimands, weight=domain_weight, group_columns=group_cols
+            lf_scored,
+            all_k_estimands,
+            weight=domain_weight,
+            group_columns=group_cols,
+            extra_exprs=missing_audit_exprs,
         )
         over_plans = [
             linearization.cluster_sums_lazy(
@@ -533,6 +623,7 @@ def _estimate_lazy(
 
         select_exprs = [
             *linearization._totals_exprs(all_k_estimands, domain_weight),
+            *missing_audit_exprs,
             domain_weight.sum().alias("__afmpi_cluster_weight"),
             (domain_weight > 0).sum().alias("__afmpi_cluster_rows"),
         ]
@@ -553,6 +644,40 @@ def _estimate_lazy(
 
     nat_res = collected_frames[0]
     over_res = collected_frames[1:]
+
+    rows_in = int(nat_res["__rows_in"].sum())
+    rows_out = int(nat_res["__rows_out"].sum())
+    dropped = rows_in - rows_out
+
+    per_indicator_rows: list[dict[str, object]] = []
+    for ind in spec.indicators:
+        missing_count = int(nat_res[f"__missing_{ind}"].sum())
+        missing_share = float(missing_count) / float(rows_in) if rows_in > 0 else 0.0
+        per_indicator_rows.append(
+            {
+                "indicator": ind,
+                "missing": missing_count,
+                "missing_share": missing_share,
+            }
+        )
+    per_indicator_schema = {
+        "indicator": pl.String,
+        "missing": pl.Int64,
+        "missing_share": pl.Float64,
+    }
+    per_indicator_df = pl.DataFrame(per_indicator_rows, schema=per_indicator_schema)
+
+    policy = spec.missing_policy
+    policy_name = (
+        policy if isinstance(policy, str) else getattr(policy, "__name__", str(policy))
+    )
+    missing_report_obj = missing.MissingReport(
+        policy=policy_name,
+        rows_in=rows_in,
+        rows_out=rows_out,
+        dropped=dropped,
+        per_indicator=per_indicator_df,
+    )
 
     rows: list[dict[str, object]] = []
     decomposition: list[dict[str, object]] = []
@@ -681,9 +806,10 @@ def _estimate_lazy(
         elif design.variance_path == "taylor":
             survey_design_taylor: SurveyDesign = design  # type: ignore[assignment]
             group_cols = _stage_group_columns_lazy(lf_scored, survey_design_taylor)
-            universe = nat_res.select(list(group_cols)).unique(maintain_order=True)
+            nat_active = nat_res.filter(pl.col("__rows_out") > 0)
+            universe = nat_active.select(list(group_cols)).unique(maintain_order=True)
 
-            nat_sub = _extract_cutoff_sums(nat_res, raw_estimands, prefix)
+            nat_sub = _extract_cutoff_sums(nat_active, raw_estimands, prefix)
             ratios, report = _taylor_report(
                 nat_sub,
                 raw_estimands,
@@ -944,10 +1070,11 @@ def _estimate_lazy(
         _overlap=overlap,
         _panel_id=panel_id,
         _diagnostics=diagnostics_frame,
-        observations=nat_rows[0]["obs"] if nat_rows else 0,
-        excluded_observations=0,
+        observations=rows_in,
+        excluded_observations=dropped,
         _input_kind=out_kind,
         _design=design,
+        _missing_report=missing_report_obj,
     )
 
 
@@ -1762,7 +1889,7 @@ def _compute_vcov(
     if matrix is None:
         raise ValueError(
             "vcov() requires an in-memory result; re-run estimate() without "
-            "lazy=True/CensusDesign streaming"
+            "lazy=True/streaming=True"
         )
 
     if k is None:
@@ -1900,7 +2027,7 @@ def _compute_test(
     if matrix is None:
         raise ValueError(
             "test() requires an in-memory result; re-run estimate() without "
-            "lazy=True/CensusDesign streaming"
+            "lazy=True/streaming=True"
         )
 
     if k is None:

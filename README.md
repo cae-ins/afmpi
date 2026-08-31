@@ -96,8 +96,12 @@ result.confint()  # estimations et bornes
 result.degf()  # degrés de liberté par contexte de design
 result.contributions()  # H_j, CH_j, actb_j, pctb_j et leurs erreurs-types
 result.decomposition()  # contrôle de décomposabilité Σ φˡ·M0ˡ = M0
-result.changes()  # variations brutes, relatives et annualisées entre vagues
+result.diagnostics()  # décisions de design prises durant l'estimation
+result.missing_report()  # rapport d'audit sur les valeurs manquantes
+result.changes()  # variations entre vagues (nécessite l'exécution en mémoire)
 ```
+
+*Note sur les modes d'exécution* : `.estimates()`, `.to_frame()`, `.confint()`, `.degf()`, `.contributions()`, `.decomposition()`, `.diagnostics()` et `.missing_report()` sont disponibles sur l'ensemble des chemins (en mémoire et lazy/streaming). Les méthodes nécessitant les microdonnées ou des contrastes complexes (`.scores()`, `.domain()`, `.changes()`, `.vcov()`, `.test()`) requièrent une exécution en mémoire (`lazy=False`, le défaut).
 
 Chaque variable de `over=` produit sa propre ventilation à une dimension (pas un croisement),
 comme `over = c("area", "region")` dans `mpitb`.
@@ -212,7 +216,7 @@ Trois modes d'exécution explicites :
 
 | Mode | Déclenché par | Comportement |
 |---|---|---|
-| `memory` | Défaut hors `CensusDesign`/`lazy`/`from_parquet` | Chargement intégral en mémoire (pandas ou Polars eager), comportement historique inchangé. |
+| `memory` | Défaut hors `lazy`/`streaming`/`from_parquet` | Chargement intégral en mémoire (pandas ou Polars eager), comportement historique inchangé. |
 | `lazy` | `estimate(..., lazy=True)` | Construit un plan Polars sans l'exécuter ; `.collect()` déclenche le calcul. Un seul plan Polars partagé pour tous les seuils `k` et toutes les variables `over` (scan unique, vérifié par instrumentation). |
 | `streaming` | Défaut de `from_parquet(...)` (`streaming=True`) | Même plan lazy, exécuté via `engine="streaming"` de Polars ; projection de colonnes automatique (seules les colonnes nécessaires à la spécification, au design et aux `over` sont lues). |
 
@@ -241,19 +245,18 @@ ressources explicite passé via `resources=`. **Limites réelles observées avec
 - `batch_size` : effectif, contrôle réellement le nombre de réplicats par lot dans
   `replicate_totals` (chemin en mémoire).
 
-**Benchmark réel** (mesuré le 2026-08-31 sur Windows 11, Intel 16 coeurs physiques / 22 logiques,
-31 Go RAM, Python 3.12.7, `polars==1.31.0`) :
+**Benchmark réel** (mesuré sur Windows 11, Intel 16 coeurs physiques / 22 logiques, 31 Go RAM, Python 3.12.7, `polars==1.31.0`) :
 
-| Jeu de données | Méthode | Temps | Pic RAM (delta process) | Threads observés |
+| Jeu de données | Méthode | Temps (mesure initiale / référence la plus récente) | Pic RAM (delta process) | Threads observés |
 |---|---|---|---|---|
-| 10 000 000 lignes, 30 indicateurs, 8 seuils `k`, 3 désagrégations | `afmpi` (`from_parquet`, streaming, `ExecutionConfig(max_threads=8)`) | **92,57 s** | **8,014 Go** | 22 (cible 8 non respectée, voir ci-dessus) |
+| 10 000 000 lignes, 30 indicateurs, 8 seuils `k`, 3 désagrégations | `afmpi` (`from_parquet`, streaming, `ExecutionConfig(max_threads=8)`) | **86,20 s** (référence post-v1.1.0 ; 92,57 s mesuré en phase 9) | **8,014 Go** | 22 (cible 8 non respectée sans `isolated_process`, voir ci-dessus) |
 | 100 000 lignes, mêmes paramètres | `afmpi` (`from_parquet`, streaming) | 15,87 s | — (non mesuré à cette échelle) | — |
 | 100 000 lignes, mêmes paramètres | pandas pur (`benchmarks/pandas_naive.py`, sans optimisation) | 5,57 s | — | — |
 
 Cible normative (`PLAN.md` §14.9) : moins de 300 s **et** moins de 8 Go de pic mémoire sur 10M
-lignes. Le temps est largement sous la cible. Le pic mémoire mesuré (8,014 Go) est **légèrement
+lignes. Le temps (86,20 s) est largement sous la cible. Le pic mémoire mesuré (8,014 Go) est **légèrement
 au-dessus** de la cible de 8 Go — rapporté tel quel ; le test `@pytest.mark.slow` correspondant
-n'asserte actuellement que sur le temps, pas sur la mémoire.
+asserte sur le temps.
 
 **Passage à l'échelle 10M/30M/50M, à charge combinatoire égale** (mesuré le 2026-09-01, mêmes
 8 seuils `k` / 3 désagrégations / 10 dimensions aux trois échelles, machine identique ci-dessus) :
@@ -281,7 +284,7 @@ spécifications (8 seuils `k` × 3 variables `over` × 10 dimensions) :
 | 1 000 | 5,2 s |
 | 10 000 | 5,7 s |
 | 100 000 | 7,5 s à 15,9 s (variable selon l'état du process — voir note ci-dessous) |
-| 10 000 000 | 92,6 s |
+| 10 000 000 | 86,2 s à 92,6 s |
 
 Même à 1 000 lignes, l'appel prend plus de 5 secondes : le temps est dominé par la construction et
 l'exécution du plan Polars pour l'ensemble des combinaisons seuil × dimension × sous-groupe,
@@ -306,8 +309,7 @@ phase 9 constitue donc un progrès net, même si le coût fixe par appel reste u
 pour un usage à échelle intermédiaire.
 
 **Validation et conformité statistique contre `survey` (R 4.5.3)** (`tests/test_conformity/`, `tests/oracle/`) :
-Une suite exhaustive de 369 tests vérifie la co-ïncidence numérique contre les oracles R `survey`,
-**sur le chemin en mémoire ET sur le chemin lazy/streaming** :
+Une suite de conformité statistique vérifie la co-ïncidence numérique contre les oracles R `survey` (20 tests sur 98 valeurs de référence dans `tests/test_conformity/reference/`), au sein d'une suite globale de plus de 370 tests rapides, **sur le chemin en mémoire ET sur le chemin lazy/streaming** :
 - Sondage aléatoire simple (SRS) et stratifié simple ;
 - Plans de sondage en grappes et multi-degrés avec correction de population finie (FPC) ;
 - Plans PPS avec remise et sans remise (Sen-Yates-Grundy, Hájek) ;

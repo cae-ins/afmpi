@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import pandas as pd
 import polars as pl
 
 from .deprivation import SCORE, WEIGHT, DeprivationMatrix
@@ -187,7 +186,7 @@ class EstimationResult:
         if self._matrix is None:
             raise ValueError(
                 "scores() requires an in-memory result; re-run estimate() without "
-                "lazy=True/CensusDesign streaming"
+                "lazy=True/streaming=True"
             )
 
         frames = []
@@ -243,16 +242,19 @@ class EstimationResult:
 
         if self._matrix is None:
             if self._missing_report is not None:
-                return self._missing_report
-            return MissingReport(
-                policy="listwise",
-                rows_in=self.observations,
-                rows_out=self.observations - self.excluded_observations,
-                dropped=self.excluded_observations,
-                per_indicator=pl.DataFrame()
-                if self._input_kind != "pandas"
-                else pd.DataFrame(),
-            )
+                report = self._missing_report
+                if self._input_kind == "pandas":
+                    return MissingReport(
+                        policy=report.policy,
+                        rows_in=report.rows_in,
+                        rows_out=report.rows_out,
+                        dropped=report.dropped,
+                        per_indicator=report.per_indicator.to_pandas()
+                        if isinstance(report.per_indicator, pl.DataFrame)
+                        else report.per_indicator,
+                    )
+                return report
+            raise NotImplementedError("missing_report is not available for this result")
         report = self._matrix.missing_report
         if self._matrix.input_kind == "pandas":
             return MissingReport(
@@ -274,8 +276,8 @@ class EstimationResult:
 
         if self._matrix is None:
             raise ValueError(
-                "scores() requires an in-memory result; re-run estimate() without "
-                "lazy=True/CensusDesign streaming"
+                "domain() requires an in-memory result; re-run estimate() without "
+                "lazy=True/streaming=True or use domain= directly in estimate()"
             )
 
         from .estimation import _estimate_from_matrix

@@ -290,3 +290,23 @@ def test_7_negative_change_interval():
     assert abs_row["lci"] < 0
     # uci is also less than 0 or valid float
     assert not math.isnan(abs_row["uci"])
+
+
+def test_lazy_path_with_tvar_raises_not_implemented():
+    """Point 2: tvar with lazy=True raises explicit NotImplementedError."""
+    df = _make_two_wave_disjoint_data()
+    spec = Specification({"d1": ["d1"], "d2": ["d2"]})
+    design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
+
+    with pytest.raises(NotImplementedError, match="Changes over time .* not supported on lazy"):
+        estimate(df, spec, design, tvar="wave", lazy=True)
+
+
+def test_lazy_path_with_nonexistent_tvar_raises_value_error():
+    """Point 2: nonexistent tvar with lazy=True raises ValueError on column absence."""
+    df = _make_two_wave_disjoint_data()
+    spec = Specification({"d1": ["d1"], "d2": ["d2"]})
+    design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
+
+    with pytest.raises(ValueError, match="tvar column 'nonexistent_col' is absent"):
+        estimate(df, spec, design, tvar="nonexistent_col", lazy=True)

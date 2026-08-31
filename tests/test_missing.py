@@ -249,3 +249,30 @@ def test_missing_report_with_pandas_input():
     res = estimate(data, spec)
     report = res.missing_report()
     assert isinstance(report.per_indicator, pd.DataFrame)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    ["listwise_deletion", "reweighting", "treat_as_nondeprived"],
+)
+def test_missing_report_eager_lazy_parity(policy: str) -> None:
+    """Test parity of missing_report() between eager and lazy execution."""
+    data = pl.DataFrame(
+        {
+            "i1": [1, None, 0, 1, None],
+            "i2": [None, None, 1, 0, None],
+            "i3": [1, 1, 1, 1, None],
+        }
+    )
+    spec = Specification({"d": ["i1", "i2", "i3"]}, missing_policy=policy)
+    res_eager = estimate(data, spec, k=0.5, lazy=False)
+    res_lazy = estimate(data, spec, k=0.5, lazy=True).collect()
+
+    rep_eager = res_eager.missing_report()
+    rep_lazy = res_lazy.missing_report()
+
+    assert rep_lazy.policy == rep_eager.policy == policy
+    assert rep_lazy.rows_in == rep_eager.rows_in == 5
+    assert rep_lazy.rows_out == rep_eager.rows_out
+    assert rep_lazy.dropped == rep_eager.dropped
+    pl.testing.assert_frame_equal(rep_lazy.per_indicator, rep_eager.per_indicator)

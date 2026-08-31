@@ -46,17 +46,27 @@ def apply_transform(
     weights = spec.indicator_weights
     indicators = spec.indicators
     policy = spec.missing_policy
+    is_lazy = isinstance(frame, pl.LazyFrame)
 
     if isinstance(policy, str):
         if policy == "listwise_deletion":
             complete = pl.all_horizontal([pl.col(item).is_not_null() for item in indicators])
-            out_frame = frame.filter(complete)
-            contributions = [
-                (pl.col(item).cast(pl.Float64) * weights[item]).alias(
-                    contribution_column(index)
-                )
-                for index, item in enumerate(indicators)
-            ]
+            if is_lazy:
+                out_frame = frame.with_columns(complete.alias("__afmpi_active"))
+                contributions = [
+                    (pl.col(item).cast(pl.Float64).fill_null(0.0) * weights[item]).alias(
+                        contribution_column(index)
+                    )
+                    for index, item in enumerate(indicators)
+                ]
+            else:
+                out_frame = frame.filter(complete)
+                contributions = [
+                    (pl.col(item).cast(pl.Float64) * weights[item]).alias(
+                        contribution_column(index)
+                    )
+                    for index, item in enumerate(indicators)
+                ]
             g_cols = [
                 pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
                 for index, item in enumerate(indicators)
@@ -80,14 +90,24 @@ def apply_transform(
                     for item in indicators
                 ]
             )
-            out_frame = frame.filter(observed_weight > 0)
-            contributions = [
-                pl.when(pl.col(item).is_not_null())
-                .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
-                .otherwise(0.0)
-                .alias(contribution_column(index))
-                for index, item in enumerate(indicators)
-            ]
+            if is_lazy:
+                out_frame = frame.with_columns((observed_weight > 0).alias("__afmpi_active"))
+                contributions = [
+                    pl.when(pl.col(item).is_not_null() & (observed_weight > 0))
+                    .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
+                    .otherwise(0.0)
+                    .alias(contribution_column(index))
+                    for index, item in enumerate(indicators)
+                ]
+            else:
+                out_frame = frame.filter(observed_weight > 0)
+                contributions = [
+                    pl.when(pl.col(item).is_not_null())
+                    .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
+                    .otherwise(0.0)
+                    .alias(contribution_column(index))
+                    for index, item in enumerate(indicators)
+                ]
             g_cols = [
                 pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
                 for index, item in enumerate(indicators)
@@ -106,6 +126,8 @@ def apply_transform(
 
         elif policy == "treat_as_nondeprived":
             out_frame = frame
+            if is_lazy:
+                out_frame = out_frame.with_columns(pl.lit(True).alias("__afmpi_active"))
             g_cols = [
                 pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
                 for index, item in enumerate(indicators)
@@ -138,6 +160,8 @@ def apply_transform(
                 "custom missing_policy must return a polars DataFrame or LazyFrame, "
                 f"got {type(res)}"
             )
+        if is_lazy and "__afmpi_active" not in res.collect_schema().names():
+            res = res.with_columns(pl.lit(True).alias("__afmpi_active"))
         if isinstance(res, pl.DataFrame):
             _validate_custom_policy_output(res, spec, indicators)
         out_frame = res.with_columns(

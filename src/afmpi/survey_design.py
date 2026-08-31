@@ -118,6 +118,14 @@ class SurveyDesign(Design):
                 raise ValueError("PPS is supported for one-stage designs only")
             if len(resolved) == 1 and resolved[0].fpc is not None:
                 raise ValueError("PPS cannot be combined with fpc at stage 1")
+            if (
+                self.pps.method == "without_replacement"
+                and self.lonely_psu in ("adjust", "average")
+            ):
+                raise ValueError(
+                    f"lonely_psu={self.lonely_psu!r} is not supported for "
+                    "PPS without replacement; use 'fail', 'certainty', or 'collapse'"
+                )
 
         valid_lonely = {"fail", "certainty", "adjust", "average", "collapse"}
         if self.lonely_psu not in valid_lonely:

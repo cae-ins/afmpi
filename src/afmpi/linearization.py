@@ -158,6 +158,7 @@ def influence(
 def _cluster_sums_exprs(
     estimands: Sequence[RatioEstimand],
     weight: pl.Expr | str | None = None,
+    extra_exprs: Sequence[pl.Expr] = (),
 ) -> list[pl.Expr]:
     n = (
         pl.col(WEIGHT)
@@ -166,6 +167,7 @@ def _cluster_sums_exprs(
     )
     return [
         *_totals_exprs(estimands, n),
+        *extra_exprs,
         n.sum().alias("__afmpi_cluster_weight"),
         (n > 0).sum().alias("__afmpi_cluster_rows"),
     ]
@@ -176,10 +178,13 @@ def cluster_sums_lazy(
     estimands: Sequence[RatioEstimand],
     weight: pl.Expr | str | None = None,
     group_columns: Sequence[str] = (STRATUM, PSU),
+    extra_exprs: Sequence[pl.Expr] = (),
 ) -> pl.LazyFrame:
     """Collapse the sample to one row per cluster (lazy)."""
 
-    return lf.group_by(list(group_columns)).agg(_cluster_sums_exprs(estimands, weight))
+    return lf.group_by(list(group_columns)).agg(
+        _cluster_sums_exprs(estimands, weight, extra_exprs=extra_exprs)
+    )
 
 
 def cluster_sums(

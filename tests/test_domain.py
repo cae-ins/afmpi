@@ -278,3 +278,19 @@ def test_several_cutoffs_make_the_scalar_shortcuts_ambiguous():
         _ = result.M0
     assert result.to_frame().height == 2
     assert result.scores().height == 80
+
+
+def test_domain_error_message_on_lazy_result():
+    """Point 9: domain() on lazy result says domain() requires an in-memory result."""
+    frame, design = sample(seed=100, rows=40)
+    result = estimate(frame, SPEC, design, k=0.33, lazy=True).collect()
+    with pytest.raises(ValueError, match=r"^domain\(\) requires an in-memory result"):
+        result.domain("region == 'north'")
+
+
+def test_scores_error_message_on_lazy_result():
+    """scores() on lazy result correctly mentions scores()."""
+    frame, design = sample(seed=100, rows=40)
+    result = estimate(frame, SPEC, design, k=0.33, lazy=True).collect()
+    with pytest.raises(ValueError, match=r"^scores\(\) requires an in-memory result"):
+        result.scores()

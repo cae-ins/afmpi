@@ -145,7 +145,7 @@ def test_streaming_retains_no_line_level_matrix(tmp_path: Path, sample_df):
     with pytest.raises(ValueError, match="scores\\(\\) requires an in-memory result"):
         res.scores()
 
-    with pytest.raises(ValueError, match="scores\\(\\) requires an in-memory result"):
+    with pytest.raises(ValueError, match="domain\\(\\) requires an in-memory result"):
         res.domain("region == 'North'")
 
 
@@ -275,7 +275,17 @@ def test_full_10m_census_benchmark(tmp_path: Path):
     assert t_elapsed < 300.0, f"Benchmark elapsed time {t_elapsed:.2f}s exceeded 300s target"
 
 
+_MIN_RAM_30M_BYTES = 20 * (1024**3)  # 20 GB
+_MIN_RAM_50M_BYTES = 28 * (1024**3)  # 28 GB
+_has_enough_ram_30m = psutil.virtual_memory().total >= _MIN_RAM_30M_BYTES
+_has_enough_ram_50m = psutil.virtual_memory().total >= _MIN_RAM_50M_BYTES
+
+
 @pytest.mark.slow
+@pytest.mark.skipif(
+    not _has_enough_ram_30m,
+    reason="Full 30M benchmark requires at least 20 GB of RAM",
+)
 def test_full_30m_census_benchmark(tmp_path: Path):
     """Full 30,000,000 row census performance benchmark."""
     import time
@@ -320,6 +330,10 @@ def test_full_30m_census_benchmark(tmp_path: Path):
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    not _has_enough_ram_50m,
+    reason="Full 50M benchmark requires at least 28 GB of RAM",
+)
 def test_full_50m_census_benchmark(tmp_path: Path):
     """Full 50,000,000 row census performance benchmark."""
     import time
@@ -538,3 +552,36 @@ def test_isolated_process_execution(sample_df: pl.DataFrame) -> None:
     assert_frame_equal(
         res_normal.estimates(), res_isolated.estimates(), check_exact=False, atol=1e-10
     )
+
+
+def test_first_call_max_threads_warning() -> None:
+    """Point 5: max_threads emits warning on first call if actual thread pool != requested."""
+    import subprocess
+    import sys
+
+    cmd = [
+        sys.executable,
+        "-c",
+        """
+import warnings, polars as pl
+# Force thread pool initialization as happens in realistic usage
+_ = pl.thread_pool_size()
+
+import sys; sys.path.insert(0, 'src')
+from afmpi import Specification, SurveyDesign, ExecutionConfig, estimate
+
+data = pl.DataFrame({'ind1': [1, 0], 'ind2': [0, 1], 'w': [1.0, 1.0]})
+spec = Specification({'d1': ['ind1'], 'd2': ['ind2']})
+design = SurveyDesign(weights='w')
+cfg = ExecutionConfig(max_threads=1)
+
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter('always')
+    estimate(data, spec, design, resources=cfg)
+    msg_list = [str(item.message) for item in w]
+    assert any('has no effect' in m for m in msg_list), f'Expected warning, got: {msg_list}'
+print('OK')
+""",
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "OK" in out.stdout

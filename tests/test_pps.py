@@ -1,9 +1,15 @@
-"""Tests for PPS (unequal probability sampling) design (PLAN.md §14.4b)."""
-
+import numpy as np
 import pandas as pd
 import pytest
 
-from afmpi import PPSDesign, Specification, Stage, SurveyDesign, estimate
+from afmpi import (
+    LonelyPSUWarning,
+    PPSDesign,
+    Specification,
+    Stage,
+    SurveyDesign,
+    estimate,
+)
 
 
 @pytest.fixture
@@ -240,4 +246,88 @@ def test_pps_errors(spec: Specification) -> None:
             weights="w",
             stages=[Stage(id="p1", fpc="fpc1")],
             pps=PPSDesign(method="without_replacement", inclusion_probability="pi"),
+        )
+
+
+def test_pps_lonely_psu_five_policies(spec: Specification) -> None:
+    """8. Test all 5 lonely PSU policies on a PPS design with a single PSU in a stratum."""
+    # 2 strata: H1 has 2 PSUs (P1, P2), H2 has 1 lonely PSU (P3)
+    df = pd.DataFrame(
+        [
+            {"h": "H1", "psu": "P1", "w": 10.0, "pi": 0.1, "ind1": 1, "ind2": 0},
+            {"h": "H1", "psu": "P1", "w": 10.0, "pi": 0.1, "ind1": 1, "ind2": 1},
+            {"h": "H1", "psu": "P2", "w": 5.0, "pi": 0.2, "ind1": 0, "ind2": 0},
+            {"h": "H1", "psu": "P2", "w": 5.0, "pi": 0.2, "ind1": 0, "ind2": 1},
+            {"h": "H2", "psu": "P3", "w": 4.0, "pi": 0.25, "ind1": 1, "ind2": 1},
+            {"h": "H2", "psu": "P3", "w": 4.0, "pi": 0.25, "ind1": 1, "ind2": 0},
+        ]
+    )
+
+    # 1. fail: emits LonelyPSUWarning and returns NaN SE
+    d_fail = SurveyDesign(
+        weights="w",
+        strata="h",
+        psu="psu",
+        lonely_psu="fail",
+        pps=PPSDesign(
+            method="without_replacement", inclusion_probability="pi", variance="hajek"
+        ),
+    )
+    with pytest.warns(LonelyPSUWarning, match="contain\\(s\\) a single PSU"):
+        res_fail = estimate(df, spec, d_fail, k=0.5).estimates()
+    h_fail = res_fail[res_fail["measure"] == "H"].iloc[0]
+    assert np.isnan(h_fail["se"])
+
+    # 2. certainty: lonely stratum has 0 variance contribution
+    d_cert = SurveyDesign(
+        weights="w",
+        strata="h",
+        psu="psu",
+        lonely_psu="certainty",
+        pps=PPSDesign(
+            method="without_replacement", inclusion_probability="pi", variance="hajek"
+        ),
+    )
+    res_cert = estimate(df, spec, d_cert, k=0.5).estimates()
+    h_cert = res_cert[res_cert["measure"] == "H"].iloc[0]
+    assert np.isfinite(h_cert["se"])
+    assert h_cert["se"] > 0
+
+    # 3. collapse: merges lonely stratum and computes valid variance
+    d_col = SurveyDesign(
+        weights="w",
+        strata="h",
+        psu="psu",
+        lonely_psu="collapse",
+        pps=PPSDesign(
+            method="without_replacement", inclusion_probability="pi", variance="hajek"
+        ),
+    )
+    res_col = estimate(df, spec, d_col, k=0.5).estimates()
+    h_col = res_col[res_col["measure"] == "H"].iloc[0]
+    assert np.isfinite(h_col["se"])
+    assert h_col["se"] > 0
+
+    # 4. adjust: raises ValueError for PPS without replacement
+    with pytest.raises(ValueError, match="not supported for PPS without replacement"):
+        SurveyDesign(
+            weights="w",
+            strata="h",
+            psu="psu",
+            lonely_psu="adjust",
+            pps=PPSDesign(
+                method="without_replacement", inclusion_probability="pi", variance="hajek"
+            ),
+        )
+
+    # 5. average: raises ValueError for PPS without replacement
+    with pytest.raises(ValueError, match="not supported for PPS without replacement"):
+        SurveyDesign(
+            weights="w",
+            strata="h",
+            psu="psu",
+            lonely_psu="average",
+            pps=PPSDesign(
+                method="without_replacement", inclusion_probability="pi", variance="hajek"
+            ),
         )

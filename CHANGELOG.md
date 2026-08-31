@@ -9,6 +9,74 @@ Conformément à la discipline méthodologique du projet, tout écart numérique
 
 ---
 
+## [1.1.1] - 2026-09-01
+
+### Fixed
+- **[CRITIQUE] `vcov()` doublait la diagonale sur les plans PPS sans remise** (Hájek et
+  Sen-Yates-Grundy) : `variance.py`, la boucle de construction de la matrice incrémentait deux
+  fois la même entrée `(k,k)` pour les termes diagonaux. La variance rapportée par `vcov()` valait
+  le double de `se()²`, **contaminant `test()`** (Wald) sur tout plan PPS -- SE de contraste
+  surestimé d'environ 30%, sous-rejet systématique des tests d'hypothèse. Trouvé par une
+  évaluation indépendante (Claude Opus 5) juste après `v1.1.0`, confirmé par re-dérivation directe
+  (`vcov_diag / se² = 2.000000` avant correctif). Corrigé et vérifié indépendamment après
+  correction : ratio = 1.0000 sur Hájek et Sen-Yates-Grundy. **Test manquant ajouté** :
+  `diag(vcov()) == se()²` pour PPS Hájek et Sen-Yates-Grundy dans `tests/test_vcov.py` (le
+  chemin Taylor/réplication/census avait déjà ce test, PPS non -- c'est le trou qui a laissé
+  passer le bug).
+- **`.changes()` silencieusement inopérant sur le chemin lazy**, avec un message d'erreur
+  **trompeur** ("aucune variable temporelle déclarée" alors qu'elle l'était) : `tvar`/`cot_year`/
+  `panel_id` sont maintenant validés dès l'appel `estimate(..., lazy=True)` -- colonne absente
+  rejetée par `ValueError` honnête, combinaison valide mais non supportée rejetée par
+  `NotImplementedError` explicite renvoyant vers le chemin en mémoire.
+- **`missing_report()` fabriquait de fausses valeurs sur le chemin lazy** (politique toujours
+  rapportée `"listwise"`, `dropped=0` même quand des lignes étaient réellement exclues). Les
+  statistiques d'audit réelles (lignes actives/exclues par indicateur) sont maintenant calculées
+  dans le même plan Polars que l'estimation, sans balayage supplémentaire du fichier source.
+  Vérifié : parité exacte eager/lazy sur les 3 politiques (`listwise_deletion`, `reweighting`,
+  `treat_as_nondeprived`).
+- **`lonely_psu="adjust"`/`"average"` silencieusement remplacé par `"certainty"` sur les plans
+  PPS sans remise** (branche morte dans `variance.py`) : ces deux politiques n'ont pas de
+  définition statistique valide pour Hájek/SYG -- `SurveyDesign(pps=..., lonely_psu="adjust"|
+  "average")` lève maintenant `ValueError` explicite à la construction plutôt que de substituer
+  silencieusement une autre politique.
+- **`ExecutionConfig(max_threads=N)` n'avertissait qu'au deuxième appel** avec une valeur
+  différente -- le premier appel (le cas le plus courant, puisque `import afmpi` importe déjà
+  Polars) échouait silencieusement. L'avertissement compare maintenant directement
+  `pl.thread_pool_size()` à la valeur demandée, dès le premier appel.
+- Message d'erreur copié-collé dans `results.py` : `domain()` sur un résultat streaming
+  mentionnait `scores()` par erreur.
+
+### Added
+- `tests/test_vcov_wald_comparison.py` et `tests/test_panel_comparison.py` : les scripts et
+  données R oracle correspondants (`tests/oracle/vcov_wald_oracle.R`, `panel_oracle.R`, CSV et
+  JSON associés) existaient dans le dépôt mais n'avaient jamais été committés avec un test Python
+  qui les consomme -- corrigé. C'est précisément le genre de test qui aurait pu attraper le bug
+  `vcov()` ci-dessus plus tôt.
+- CI : `pytest.mark.skipif` basé sur la RAM disponible (`psutil.virtual_memory().total`, seuils
+  20 Go/28 Go) pour les benchmarks 30M/50M lignes, qui n'avaient jusqu'ici aucune protection contre
+  l'OOM sur un runner GitHub Actions standard. `workflow_dispatch` ajouté pour déclenchement manuel.
+
+### Fixed (documentation)
+- README : la phrase "une suite exhaustive de 369 tests vérifie la co-ïncidence numérique contre
+  les oracles R" confondait le total de la suite rapide avec le nombre de tests comparant
+  réellement à R -- corrigée en "20 tests sur 98 valeurs de référence". Les deux chiffres
+  différents du benchmark 10M (92,57 s en phase 9, 86,20 s post-`v1.1.0`) qui se contredisaient à
+  quelques lignes d'écart sont maintenant explicitement datés l'un par rapport à l'autre. Le
+  tableau des modes d'exécution ne dit plus que `CensusDesign` déclenche un mode non-`memory`
+  (faux -- seul `lazy=True`/`streaming=True`/`from_parquet(...)` le font). Les méthodes
+  indisponibles sur le chemin lazy (`.vcov()`, `.test()`, `.changes()`, `.scores()`, `.domain()`)
+  sont maintenant explicitement signalées comme telles à côté de la liste des capacités.
+
+**Intégrité du processus** : ce stamp corrige des angles morts trouvés par une évaluation
+indépendante que ce projet a lui-même sollicitée pour se challenger, pas par un audit externe
+imposé -- cohérent avec la discipline établie depuis `v1.0.0` de ne jamais présenter une version
+comme définitivement close.
+
+369 tests rapides passent avant ce stamp -> 383 après (ajout net des tests de régression et des
+deux fichiers oracle orphelins retrouvés), 0 échec, 10 sautés (Stata absent), `ruff check .` propre.
+
+---
+
 ## [1.1.0] - 2026-09-01
 
 ### Added
