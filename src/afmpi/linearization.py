@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Sequence
 
 import polars as pl
 
@@ -68,17 +69,34 @@ class RatioTotals:
 
     @property
     def value(self) -> float | None:
-        """``R = Y / X``, or ``None`` when the denominator is not positive.
-
-        An empty domain, or an ``A`` computed where nobody is poor, leaves the
-        ratio undefined. Returning ``None`` rather than ``0`` keeps the
-        distinction between "measured as zero" and "not measurable" visible all
-        the way to the result table.
-        """
+        """``R = Y / X``, or ``None`` when the denominator is not positive."""
 
         if not isfinite(self.denominator) or self.denominator <= 0:
             return None
         return self.numerator / self.denominator
+
+
+def _totals_exprs(
+    estimands: Sequence[RatioEstimand],
+    weight: pl.Expr | str | None = None,
+) -> list[pl.Expr]:
+    n = pl.col(WEIGHT) if weight is None else (pl.col(weight) if isinstance(weight, str) else weight)
+    exprs: list[pl.Expr] = []
+    for item in estimands:
+        exprs.append((n * item.y).sum().alias(_NUMERATOR_PREFIX + item.key))
+    for item in estimands:
+        exprs.append((n * item.x).sum().alias(_DENOMINATOR_PREFIX + item.key))
+    return exprs
+
+
+def totals_lazy(
+    lf: pl.LazyFrame,
+    estimands: Sequence[RatioEstimand],
+    weight: pl.Expr | str | None = None,
+) -> pl.LazyFrame:
+    """First pass (lazy): select weighted totals Y and X of every estimand."""
+
+    return lf.select(_totals_exprs(estimands, weight))
 
 
 def totals(
@@ -88,11 +106,7 @@ def totals(
 ) -> tuple[RatioTotals, ...]:
     """First pass: the weighted totals ``Y`` and ``X`` of every estimand."""
 
-    n = pl.col(WEIGHT) if weight is None else weight
-    aggregated = frame.select(
-        *[(n * item.y).sum().alias(_NUMERATOR_PREFIX + item.key) for item in estimands],
-        *[(n * item.x).sum().alias(_DENOMINATOR_PREFIX + item.key) for item in estimands],
-    ).row(0, named=True)
+    aggregated = totals_lazy(frame.lazy(), estimands, weight=weight).collect().row(0, named=True)
     return tuple(
         RatioTotals(
             estimand=item,
@@ -130,14 +144,32 @@ def influence(
     ratios: tuple[RatioTotals, ...],
     weight: pl.Expr | None = None,
 ) -> pl.DataFrame:
-    """Second pass, row level: one column of ``u_i`` per estimand.
-
-    Kept for verification and for small samples. The variance stage uses
-    :func:`cluster_influence`, which produces the same cluster sums without ever
-    materialising a row-level column.
-    """
+    """Second pass, row level: one column of ``u_i`` per estimand."""
 
     return frame.select(influence_expressions(ratios, weight))
+
+
+def _cluster_sums_exprs(
+    estimands: Sequence[RatioEstimand],
+    weight: pl.Expr | str | None = None,
+) -> list[pl.Expr]:
+    n = pl.col(WEIGHT) if weight is None else (pl.col(weight) if isinstance(weight, str) else weight)
+    return [
+        *_totals_exprs(estimands, n),
+        n.sum().alias("__afmpi_cluster_weight"),
+        (n > 0).sum().alias("__afmpi_cluster_rows"),
+    ]
+
+
+def cluster_sums_lazy(
+    lf: pl.LazyFrame,
+    estimands: Sequence[RatioEstimand],
+    weight: pl.Expr | str | None = None,
+    group_columns: Sequence[str] = (STRATUM, PSU),
+) -> pl.LazyFrame:
+    """Collapse the sample to one row per cluster (lazy)."""
+
+    return lf.group_by(list(group_columns)).agg(_cluster_sums_exprs(estimands, weight))
 
 
 def cluster_sums(
@@ -146,19 +178,9 @@ def cluster_sums(
     weight: pl.Expr | None = None,
     group_columns: tuple[str, ...] = (STRATUM, PSU),
 ) -> pl.DataFrame:
-    """Collapse the sample to one row per cluster, keeping ``n*y`` and ``n*x``.
+    """Collapse the sample to one row per cluster, keeping ``n*y`` and ``n*x``."""
 
-    This is the only step that touches every observation. Everything downstream
-    works on the collapsed table (§7).
-    """
-
-    n = pl.col(WEIGHT) if weight is None else weight
-    return frame.group_by(list(group_columns)).agg(
-        *[(n * item.y).sum().alias(_NUMERATOR_PREFIX + item.key) for item in estimands],
-        *[(n * item.x).sum().alias(_DENOMINATOR_PREFIX + item.key) for item in estimands],
-        n.sum().alias("__afmpi_cluster_weight"),
-        (n > 0).sum().alias("__afmpi_cluster_rows"),
-    )
+    return cluster_sums_lazy(frame.lazy(), estimands, weight=weight, group_columns=group_columns).collect()
 
 
 def cluster_influence(
@@ -194,11 +216,7 @@ def totals_from_clusters(
     sums: pl.DataFrame,
     estimands: tuple[RatioEstimand, ...],
 ) -> tuple[RatioTotals, ...]:
-    """Recover the global totals from the collapsed table.
-
-    Used by the domain path, where the collapsed table is built once and then
-    reused: summing the cluster sums is exact and avoids a second full scan.
-    """
+    """Recover the global totals from the collapsed table."""
 
     aggregated = sums.select(
         [pl.col(_NUMERATOR_PREFIX + item.key).sum() for item in estimands]

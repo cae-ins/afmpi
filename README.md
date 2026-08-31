@@ -192,6 +192,84 @@ indépendants et panels/chevauchants), et l'inférence complète (VCOV, tests de
 - matrice de variance-covariance complète (`.vcov()`) et tests de Wald entre domaines/sous-groupes/périodes (`.test()`), covariance inter-groupes toujours calculée, jamais supposée nulle ;
 - intégration continue GitHub Actions (`.github/workflows/tests.yml`) sur Python 3.10, 3.11 et 3.12.
 
+### Performance et exécution à l'échelle (phase 9)
+
+Trois modes d'exécution explicites :
+
+| Mode | Déclenché par | Comportement |
+|---|---|---|
+| `memory` | Défaut hors `CensusDesign`/`lazy`/`from_parquet` | Chargement intégral en mémoire (pandas ou Polars eager), comportement historique inchangé. |
+| `lazy` | `estimate(..., lazy=True)` | Construit un plan Polars sans l'exécuter ; `.collect()` déclenche le calcul. Un seul plan Polars partagé pour tous les seuils `k` et toutes les variables `over` (scan unique, vérifié par instrumentation). |
+| `streaming` | Défaut de `from_parquet(...)` (`streaming=True`) | Même plan lazy, exécuté via `engine="streaming"` de Polars ; projection de colonnes automatique (seules les colonnes nécessaires à la spécification, au design et aux `over` sont lues). |
+
+`CensusDesign` (poids + taille de ménage, sans grappes/strates) : `se=0`, `lci=uci=est`, `cv=0`,
+`df=0`, `.vcov()` renvoie une matrice de zéros, `.test()` lève `ValueError` (pas de variance
+d'échantillonnage à tester). `ci_method` est ignoré (court-circuité par `se=0`), documenté comme
+tel dans le docstring de la classe.
+
+`ExecutionConfig(max_threads=..., memory_limit=..., spill_dir=..., batch_size=...)` : budget de
+ressources explicite passé via `resources=`. **Limites réelles observées avec `polars==1.31.0`** :
+
+- `max_threads` : appliqué via `POLARS_MAX_THREADS` (`os.environ.setdefault`), donc seulement si
+  l'appel `estimate()` est la toute première opération Polars du process — le pool de threads de
+  Polars est global au process, pas par appel. Mesuré : dans le benchmark 10M ci-dessous, une
+  opération Polars antérieure dans le même process (génération du jeu de données synthétique)
+  avait déjà fixé le pool à 22 threads avant que `max_threads=8` ne s'applique — la contrainte
+  n'a **pas** été respectée dans ce scénario, conformément à la limite documentée.
+- `memory_limit` et `spill_dir` : **no-op documenté** — Polars n'expose pas de plafond mémoire ni
+  de répertoire de spill par requête dans cette version ; les définir émet un `UserWarning`
+  plutôt que de simuler un contrôle qui n'existe pas.
+- `batch_size` : effectif, contrôle réellement le nombre de réplicats par lot dans
+  `replicate_totals` (chemin en mémoire).
+
+**Benchmark réel** (mesuré le 2026-08-31 sur Windows 11, Intel 16 coeurs physiques / 22 logiques,
+31 Go RAM, Python 3.12.7, `polars==1.31.0`) :
+
+| Jeu de données | Méthode | Temps | Pic RAM (delta process) | Threads observés |
+|---|---|---|---|---|
+| 10 000 000 lignes, 30 indicateurs, 8 seuils `k`, 3 désagrégations | `afmpi` (`from_parquet`, streaming, `ExecutionConfig(max_threads=8)`) | **92,57 s** | **8,014 Go** | 22 (cible 8 non respectée, voir ci-dessus) |
+| 100 000 lignes, mêmes paramètres | `afmpi` (`from_parquet`, streaming) | 15,87 s | — (non mesuré à cette échelle) | — |
+| 100 000 lignes, mêmes paramètres | pandas pur (`benchmarks/pandas_naive.py`, sans optimisation) | 5,57 s | — | — |
+
+Cible normative (`PLAN.md` §14.9) : moins de 300 s **et** moins de 8 Go de pic mémoire sur 10M
+lignes. Le temps est largement sous la cible. Le pic mémoire mesuré (8,014 Go) est **légèrement
+au-dessus** de la cible de 8 Go — rapporté tel quel ; le test `@pytest.mark.slow` correspondant
+n'asserte actuellement que sur le temps, pas sur la mémoire.
+
+**Écart honnête** : à 100 000 lignes, `afmpi` (15,87 s) est **plus lent** que la version pandas
+naïve non optimisée (5,57 s). Ce n'est pas un simple effet d'échelle — c'est un **coût
+quasiment fixe par appel**, indépendant du nombre de lignes, mesuré sur le même jeu de
+spécifications (8 seuils `k` × 3 variables `over` × 10 dimensions) :
+
+| Lignes | Temps (chemin `from_parquet`, lazy/streaming) |
+|---|---|
+| 1 000 | 5,2 s |
+| 10 000 | 5,7 s |
+| 100 000 | 7,5 s à 15,9 s (variable selon l'état du process — voir note ci-dessous) |
+| 10 000 000 | 92,6 s |
+
+Même à 1 000 lignes, l'appel prend plus de 5 secondes : le temps est dominé par la construction et
+l'exécution du plan Polars pour l'ensemble des combinaisons seuil × dimension × sous-groupe,
+pas par le volume de données lu. Ce coût ne s'amortit qu'à très grande échelle — entre 100 000 et
+10 000 000 lignes, le temps par ligne chute d'un facteur de l'ordre de 1000. **Le point de
+croisement où `afmpi` dépasse pandas naïf en performance se situe donc quelque part entre 100 000
+et 10 000 000 lignes, pas à 100 000 comme on pourrait l'espérer** — à quantifier plus précisément
+si l'usage visé inclut des jeux de données de taille intermédiaire.
+
+Note sur la variabilité à 100 000 lignes : deux mesures indépendantes en processus Python neufs
+ont donné 15,87 s et 15,84-15,87 s (deux appels successifs dans le même processus, sans gain de
+second appel), tandis qu'un appel à la même taille exécuté après deux appels précédents (1 000
+puis 10 000 lignes) dans le même processus a donné 7,5 s. La cause exacte de cet écart n'a pas été
+isolée dans cette passe — possiblement liée à l'état du cache disque/OS ou à un effet
+d'initialisation du moteur Polars non identifié — et n'a pas été creusée davantage pour ce stamp.
+
+La comparaison pandas naïve n'a pas été mesurée à 10 000 000 lignes (boucles Python non
+vectorisées de `pandas_naive.py`, coût jugé prohibitif en session interactive). Pour rappel, la
+comparaison sur le code d'avant la phase 9 (commit `82df770`) sur ce même scénario combinatoire
+(8 seuils × 3 `over`, chemin en mémoire) a dépassé 3 minutes sans terminer à 1 000 lignes — la
+phase 9 constitue donc un progrès net, même si le coût fixe par appel reste un point d'attention
+pour un usage à échelle intermédiaire.
+
 **Validation contre `survey` (R 4.5.3)** (`tests/oracle/`) : couvre aujourd'hui le noyau (SRS,
 stratifié simple, domaines) et les plans complexes (multi-degrés/FPC, PPS SYG/Hájek). **Ne couvre
 pas encore** les méthodes de réplication (JK/JKn/BRR/Fay/bootstrap/SDR), les panels, ni VCOV/Wald
@@ -199,7 +277,7 @@ pas encore** les méthodes de réplication (JK/JKn/BRR/Fay/bootstrap/SDR), les p
 main, convergence bootstrap vs Taylor). Étendre l'oracle R à ce périmètre est la prochaine étape
 de rigueur avant la phase 9.
 
-Ne sont pas encore implémentés : les politiques de valeurs manquantes avancées (`treat_as_nondeprived`, politique personnalisée — phase 8), les entrées/sorties parquet en streaming et le `CensusDesign` (phase 9), la suite de conformité statistique complète du §8.A (phase 10).
+Ne sont pas encore implémentés : la suite de conformité statistique complète du §8.A (phase 10).
 Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 8 à 12.
 
 ## Attribution et licence

@@ -24,3 +24,8 @@ ENV/
 .pypirc
 _codex_*
 agy-review.err
+_STAMP*_BRIEF.md
+_STAMP*_FIX_BRIEF.md
+
+# Generated benchmark datasets (reproducible via benchmarks/generate_census.py)
+benchmarks/*.parquet

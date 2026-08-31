@@ -14,7 +14,7 @@ from math import isfinite
 import pandas as pd
 import polars as pl
 
-from . import missing
+from . import backend, missing
 from .design_base import Design
 from .missing import (
     SCORE,
@@ -86,7 +86,8 @@ def build(
         )
 
     indicators = spec.indicators  # also verifies that the specification is configured
-    frame, input_kind = _to_polars(df)
+    frame_raw, input_kind = backend.to_frame(df)
+    frame = frame_raw.collect() if isinstance(frame_raw, pl.LazyFrame) else frame_raw
     if frame.height == 0:
         raise ValueError("df must contain at least one observation")
 
@@ -111,14 +112,6 @@ def build(
         input_kind=input_kind,
         missing_report=report,
     )
-
-
-def _to_polars(df: pd.DataFrame | pl.DataFrame) -> tuple[pl.DataFrame, InputKind]:
-    if isinstance(df, pl.DataFrame):
-        return df, "polars"
-    if isinstance(df, pd.DataFrame):
-        return pl.from_pandas(df, include_index=False, rechunk=False), "pandas"
-    raise TypeError("df must be a pandas.DataFrame or polars.DataFrame")
 
 
 def _validate_required_columns(

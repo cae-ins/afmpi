@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pandas as pd
 import polars as pl
 
 from .deprivation import SCORE, WEIGHT, DeprivationMatrix
@@ -34,7 +35,7 @@ class EstimationResult:
 
     _estimates: pl.DataFrame
     _decomposition: pl.DataFrame
-    _matrix: DeprivationMatrix
+    _matrix: DeprivationMatrix | None
     _cutoffs: tuple[float, ...]
     _over: tuple[str, ...]
     _domain: tuple[str | None, str | None] | None
@@ -48,6 +49,9 @@ class EstimationResult:
     _diagnostics: pl.DataFrame | None = None
     observations: int = 0
     excluded_observations: int = 0
+    _input_kind: str = "polars"
+    _design: object = None
+    _missing_report: MissingReport | None = None
 
     # ------------------------------------------------------------------ state
 
@@ -179,6 +183,11 @@ class EstimationResult:
     def scores(self):
         """Row-level ``c_i``, poverty status and censored score ``c_i(k)``."""
 
+        if self._matrix is None:
+            raise ValueError(
+                "scores() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming"
+            )
+
         frames = []
         for cutoff in self._cutoffs:
             frame = (
@@ -230,6 +239,16 @@ class EstimationResult:
     def missing_report(self) -> MissingReport:
         """Audit report for missing-value policy application (PLAN.md §14.8)."""
 
+        if self._matrix is None:
+            if self._missing_report is not None:
+                return self._missing_report
+            return MissingReport(
+                policy="listwise",
+                rows_in=self.observations,
+                rows_out=self.observations - self.excluded_observations,
+                dropped=self.excluded_observations,
+                per_indicator=pl.DataFrame() if self._input_kind != "pandas" else pd.DataFrame(),
+            )
         report = self._matrix.missing_report
         if self._matrix.input_kind == "pandas":
             return MissingReport(
@@ -248,6 +267,11 @@ class EstimationResult:
         the domain instead of dropping them, so the strata and clusters seen by
         the variance are unchanged (PLAN.md §6).
         """
+
+        if self._matrix is None:
+            raise ValueError(
+                "scores() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming"
+            )
 
         from .estimation import _estimate_from_matrix
 
@@ -286,6 +310,7 @@ class EstimationResult:
             subgroup=subgroup,
             measures=measures,
             convert_fn=self._convert,
+            design=self._design,
         )
 
     def test(
@@ -298,6 +323,10 @@ class EstimationResult:
         dist: str = "F",
     ):
         """Wald test of a contrast between two domains, subgroups or periods (PLAN.md §14.7)."""
+
+        design = self._matrix.design if self._matrix is not None else self._design
+        if getattr(design, "variance_path", None) == "census":
+            raise ValueError("a census has no sampling variance; a Wald test is not defined")
 
         from .estimation import _compute_test
 
@@ -403,6 +432,6 @@ class EstimationResult:
         return ", ".join(f"{value:.6g}" for value in self._cutoffs)
 
     def _convert(self, frame: pl.DataFrame):
-        if self._matrix.input_kind == "pandas":
+        if self._input_kind == "pandas" or (self._matrix is not None and self._matrix.input_kind == "pandas"):
             return frame.to_pandas()
         return frame

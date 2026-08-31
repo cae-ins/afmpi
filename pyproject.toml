@@ -39,15 +39,19 @@ Repository = "https://github.com/cae-ins/afmpi"
 Issues = "https://github.com/cae-ins/afmpi/issues"
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = [
+  "psutil>=5.9",
+  "pytest>=7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/afmpi"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
-pythonpath = ["src"]
+addopts = "-ra -m 'not slow'"
+pythonpath = [".", "src"]
 testpaths = ["tests"]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "slow: benchmarks and long-running convergence checks",
+    "optional: needs an external reference file",
 ]

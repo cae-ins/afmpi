@@ -2,8 +2,7 @@
 
 The pipeline follows PLAN.md §5: the deprivation engine turns raw indicators
 into ``c_i``, the estimand compiler turns ``c_i`` into ratios, and then either
-the Taylor path (linearization) or the Replication path (re-estimation per
-replicate) is called.
+the Taylor path (linearization), Replication path, or Census path is called.
 """
 
 from __future__ import annotations
@@ -12,15 +11,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite, sqrt
 from numbers import Real
+import os
+import warnings
 
 import pandas as pd
 import polars as pl
 from scipy import stats
 
-from . import change_over_time, deprivation, domain as domain_module, estimands as estimands_module
+from . import backend, change_over_time, deprivation, domain as domain_module, estimands as estimands_module
 from . import linearization
+from .census_design import CensusDesign
 from .deprivation import DeprivationMatrix
 from .design_base import Design
+from .execution_config import ExecutionConfig
 from .replicate_design import ReplicateDesign
 from .replicate_estimation import (
     generate_replicate_weights,
@@ -79,8 +82,53 @@ class VarianceReport:
     observations: int
 
 
+@dataclass(frozen=True, slots=True)
+class LazyEstimation:
+    """Lazy evaluation context for Alkire-Foster estimation (PLAN.md §14.9)."""
+
+    df: object
+    spec: Specification
+    design: Design | None
+    k: float | Sequence[float]
+    over: str | Sequence[str] | None
+    tvar: str | None
+    cot_year: str | None
+    domain: str | pl.Expr | None
+    ci_method: str
+    level: float
+    check_decomposability: bool
+    overlap: str
+    panel_id: str | None
+    resources: ExecutionConfig | None = None
+    streaming: bool = False
+    projected_columns: list[str] | None = None
+
+    def collect(self) -> EstimationResult:
+        """Materialise the lazy estimation plan and return the EstimationResult."""
+
+        return _execute_estimation(
+            df=self.df,
+            spec=self.spec,
+            design=self.design,
+            k=self.k,
+            over=self.over,
+            tvar=self.tvar,
+            cot_year=self.cot_year,
+            domain=self.domain,
+            ci_method=self.ci_method,
+            level=self.level,
+            check_decomposability=self.check_decomposability,
+            overlap=self.overlap,
+            panel_id=self.panel_id,
+            resources=self.resources,
+            streaming=self.streaming,
+            projected_columns=self.projected_columns,
+            is_lazy_collect=True,
+        )
+
+
 def estimate(
-    df: pd.DataFrame | pl.DataFrame,
+    df: pd.DataFrame | pl.DataFrame | pl.LazyFrame | object,
     spec: Specification,
     design: Design | None = None,
     *,
@@ -94,35 +142,152 @@ def estimate(
     check_decomposability: bool = True,
     overlap: str = "auto",
     panel_id: str | None = None,
-) -> EstimationResult:
-    """Estimate Alkire-Foster measures with design-based standard errors."""
+    lazy: bool = False,
+    resources: ExecutionConfig | None = None,
+    streaming: bool = False,
+    projected_columns: list[str] | None = None,
+) -> EstimationResult | LazyEstimation:
+    """Estimate Alkire-Foster measures with design-based standard errors.
 
+    Note on CensusDesign: when ``design=CensusDesign(...)``, sampling variance is
+    identically zero (se=0.0, lci=uci=est), and ``ci_method`` is ignored.
+    """
+
+    if lazy:
+        return LazyEstimation(
+            df=df,
+            spec=spec,
+            design=design,
+            k=k,
+            over=over,
+            tvar=tvar,
+            cot_year=cot_year,
+            domain=domain,
+            ci_method=ci_method,
+            level=level,
+            check_decomposability=check_decomposability,
+            overlap=overlap,
+            panel_id=panel_id,
+            resources=resources,
+            streaming=streaming,
+            projected_columns=projected_columns,
+        )
+
+    return _execute_estimation(
+        df=df,
+        spec=spec,
+        design=design,
+        k=k,
+        over=over,
+        tvar=tvar,
+        cot_year=cot_year,
+        domain=domain,
+        ci_method=ci_method,
+        level=level,
+        check_decomposability=check_decomposability,
+        overlap=overlap,
+        panel_id=panel_id,
+        resources=resources,
+        streaming=streaming,
+        projected_columns=projected_columns,
+    )
+
+
+def _execute_estimation(
+    df: object,
+    spec: Specification,
+    design: Design | None,
+    k: float | Sequence[float],
+    over: str | Sequence[str] | None,
+    tvar: str | None,
+    cot_year: str | None,
+    domain: str | pl.Expr | None,
+    ci_method: str,
+    level: float,
+    check_decomposability: bool,
+    overlap: str,
+    panel_id: str | None,
+    resources: ExecutionConfig | None = None,
+    streaming: bool = False,
+    projected_columns: list[str] | None = None,
+    is_lazy_collect: bool = False,
+) -> EstimationResult:
     if design is None:
         design = SurveyDesign()
+
+    if resources is not None and resources.max_threads is not None:
+        requested = str(resources.max_threads)
+        existing = os.environ.get("POLARS_MAX_THREADS")
+        # Polars reads POLARS_MAX_THREADS once, at the first Polars operation of the
+        # process -- there is no per-call thread pool. `setdefault` avoids clobbering
+        # a value another `estimate()` call (or the user) already set; either way, if
+        # this is not the first Polars operation in this process, the setting below
+        # is silently ignored by Polars, hence the warning rather than a false promise.
+        os.environ.setdefault("POLARS_MAX_THREADS", requested)
+        if existing not in (None, requested):
+            warnings.warn(
+                f"ExecutionConfig(max_threads={resources.max_threads}) has no effect: "
+                f"POLARS_MAX_THREADS is already set to {existing!r} for this process. "
+                "Polars' thread pool is global to the process and read once, at the "
+                "first Polars operation -- it cannot be reconfigured per call.",
+                stacklevel=2,
+            )
+
     cutoffs = _validate_cutoffs(k)
     variables = _validate_over(over)
     if ci_method not in CI_METHODS:
         raise ValueError(f"ci_method must be one of {CI_METHODS}; got {ci_method!r}")
 
-    temp_frame = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
-    change_over_time.validate_time_variables(temp_frame, tvar, cot_year)
+    frame_obj, input_kind = backend.to_frame(df)
 
-    required_vars = list(variables)
-    if tvar is not None:
-        required_vars.append(tvar)
-    if cot_year is not None:
-        required_vars.append(cot_year)
-    if panel_id is not None and panel_id not in required_vars:
-        required_vars.append(panel_id)
-
-    matrix = deprivation.build(
-        df,
-        spec,
-        design,
-        required_columns=tuple(required_vars) + design.design_columns,
+    is_lazy_path = (
+        isinstance(frame_obj, pl.LazyFrame)
+        or input_kind in ("parquet", "polars-lazy")
+        or streaming
+        or is_lazy_collect
     )
-    return _estimate_from_matrix(
-        matrix,
+
+    if not is_lazy_path:
+        temp_frame = frame_obj if isinstance(frame_obj, pl.DataFrame) else pl.from_pandas(df)
+        change_over_time.validate_time_variables(temp_frame, tvar, cot_year)
+
+        required_vars = list(variables)
+        if tvar is not None:
+            required_vars.append(tvar)
+        if cot_year is not None:
+            required_vars.append(cot_year)
+        if panel_id is not None and panel_id not in required_vars:
+            required_vars.append(panel_id)
+
+        batch_size_override = resources.batch_size if resources is not None else None
+        matrix = deprivation.build(
+            df,
+            spec,
+            design,
+            required_columns=tuple(required_vars) + design.design_columns,
+        )
+        return _estimate_from_matrix(
+            matrix,
+            cutoffs=cutoffs,
+            variables=variables,
+            tvar=tvar,
+            cot_year=cot_year,
+            domain=domain,
+            ci_method=ci_method,
+            level=level,
+            check_decomposability=check_decomposability,
+            overlap=overlap,
+            panel_id=panel_id,
+            batch_size=batch_size_override,
+            projected_columns=projected_columns,
+            input_kind=input_kind,
+        )
+
+    return _estimate_lazy(
+        frame_obj=frame_obj,
+        input_kind=input_kind,
+        spec=spec,
+        design=design,
         cutoffs=cutoffs,
         variables=variables,
         tvar=tvar,
@@ -133,7 +298,364 @@ def estimate(
         check_decomposability=check_decomposability,
         overlap=overlap,
         panel_id=panel_id,
+        resources=resources,
+        streaming=streaming,
+        projected_columns=projected_columns,
     )
+
+
+def _estimate_lazy(
+    frame_obj: pl.DataFrame | pl.LazyFrame,
+    input_kind: str,
+    spec: Specification,
+    design: Design,
+    cutoffs: tuple[float, ...],
+    variables: tuple[str, ...],
+    tvar: str | None,
+    cot_year: str | None,
+    domain: str | pl.Expr | None,
+    ci_method: str,
+    level: float,
+    check_decomposability: bool,
+    overlap: str,
+    panel_id: str | None,
+    resources: ExecutionConfig | None = None,
+    streaming: bool = False,
+    projected_columns: list[str] | None = None,
+) -> EstimationResult:
+    lf = frame_obj.lazy() if isinstance(frame_obj, pl.DataFrame) else frame_obj
+
+    if domain is not None:
+        if isinstance(domain, str):
+            # Same reading as the eager path (domain_module.from_expression):
+            # a string domain is always a SQL-flavoured boolean expression.
+            lf = lf.filter(pl.sql_expr(domain))
+        elif isinstance(domain, pl.Expr):
+            lf = lf.filter(domain)
+
+    indicators = spec.indicators
+    w_col = design.weights
+    h_col = design.household_size
+    if w_col is not None and h_col is not None:
+        weight_expr = pl.col(w_col).cast(pl.Float64) * pl.col(h_col).cast(pl.Float64)
+    elif w_col is not None:
+        weight_expr = pl.col(w_col).cast(pl.Float64)
+    elif h_col is not None:
+        weight_expr = pl.col(h_col).cast(pl.Float64)
+    else:
+        weight_expr = pl.lit(1.0, dtype=pl.Float64)
+
+    lf = lf.with_columns(weight_expr.alias(deprivation.WEIGHT))
+
+    missing_cond = pl.all_horizontal([pl.col(col).is_not_null() for col in indicators])
+    lf_valid = lf.filter(missing_cond)
+
+    extra_exprs = []
+    for index, indicator in enumerate(indicators):
+        w = spec.indicator_weights[indicator]
+        g_col = deprivation.deprived_column(index)
+        obs_col = deprivation.observed_column(index)
+        contrib_col = deprivation.contribution_column(index)
+        extra_exprs.extend([
+            pl.col(indicator).cast(pl.Float64).alias(g_col),
+            pl.lit(1.0, dtype=pl.Float64).alias(obs_col),
+            (pl.col(indicator).cast(pl.Float64) * w).alias(contrib_col),
+        ])
+    score_expr = pl.sum_horizontal([pl.col(ind).cast(pl.Float64) * w for ind, w in spec.indicator_weights.items()])
+    lf_scored = lf_valid.with_columns(score_expr.alias(deprivation.SCORE), *extra_exprs)
+    lf_scored = _add_design_identifiers_lazy(lf_scored, design)
+
+    all_k_estimands: list[estimands_module.RatioEstimand] = []
+    k_estimand_map: dict[float, tuple[estimands_module.RatioEstimand, ...]] = {}
+
+    for cutoff in cutoffs:
+        raw_estimands = estimands_module.build(spec, cutoff)
+        k_estimand_map[cutoff] = raw_estimands
+        for item in raw_estimands:
+            prefixed_key = f"k_{cutoff}__" + item.key
+            prefixed_estimand = estimands_module.RatioEstimand(
+                key=prefixed_key,
+                y=item.y,
+                x=item.x,
+                measure=item.measure,
+                indicator=item.indicator,
+                dimension=item.dimension,
+                weight=item.weight,
+            )
+            all_k_estimands.append(prefixed_estimand)
+
+    if design.variance_path == "census":
+        plan_nat = lf_scored.select(
+            *linearization._totals_exprs(all_k_estimands, deprivation.WEIGHT),
+            pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
+            (pl.col(deprivation.WEIGHT) > 0).sum().alias("__afmpi_cluster_rows"),
+        )
+    else:
+        group_cols = _stage_group_columns_lazy(lf_scored, design)
+        plan_nat = linearization.cluster_sums_lazy(lf_scored, all_k_estimands, weight=deprivation.WEIGHT, group_columns=group_cols)
+
+    over_plans: list[pl.LazyFrame] = []
+    for var in variables:
+        if design.variance_path == "census":
+            over_plans.append(
+                lf_scored.group_by(var).agg(
+                    *linearization._totals_exprs(all_k_estimands, deprivation.WEIGHT),
+                    pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
+                    (pl.col(deprivation.WEIGHT) > 0).sum().alias("__afmpi_cluster_rows"),
+                )
+            )
+        else:
+            group_cols = _stage_group_columns_lazy(lf_scored, design)
+            over_plans.append(
+                linearization.cluster_sums_lazy(
+                    lf_scored,
+                    all_k_estimands,
+                    weight=deprivation.WEIGHT,
+                    group_columns=tuple(group_cols) + (var,),
+                )
+            )
+
+    all_plans = [plan_nat, *over_plans]
+    engine = "streaming" if streaming else "auto"
+    collected_frames = pl.collect_all(all_plans, engine=engine)
+
+    nat_res = collected_frames[0]
+    over_res = collected_frames[1:]
+
+    rows: list[dict[str, object]] = []
+    decomposition: list[dict[str, object]] = []
+    diag_rows: list[dict[str, str]] = []
+
+    if projected_columns is not None:
+        diag_rows.append({
+            "topic": "projection_pushdown",
+            "context": "from_parquet",
+            "decision": "selected_columns",
+            "detail": ", ".join(sorted(projected_columns)),
+        })
+
+    nat_rows: list[dict[str, object]] = []
+
+    for cutoff in cutoffs:
+        raw_estimands = k_estimand_map[cutoff]
+        prefix = f"k_{cutoff}__"
+
+        nat_sub = _extract_cutoff_sums(nat_res, raw_estimands, prefix)
+
+        if design.variance_path == "census":
+            nat_dict = nat_res.row(0, named=True)
+            pop = float(nat_dict.get("__afmpi_cluster_weight") or 0.0)
+            obs = int(nat_dict.get("__afmpi_cluster_rows") or 0)
+            ratios = tuple(
+                linearization.RatioTotals(
+                    estimand=item,
+                    numerator=float(nat_dict.get(linearization._NUMERATOR_PREFIX + prefix + item.key) or 0.0),
+                    denominator=float(nat_dict.get(linearization._DENOMINATOR_PREFIX + prefix + item.key) or 0.0),
+                )
+                for item in raw_estimands
+            )
+            if not pop and ratios:
+                pop = ratios[0].denominator
+            degrees = DesignDegrees(psus=0, strata=0, lonely_strata=0, override_df=0)
+            keys = tuple(item.key for item in raw_estimands)
+            report = VarianceReport(values={k: 0.0 for k in keys}, degrees=degrees, population=pop, observations=obs)
+            nat_rows = _context_rows(ratios, report, cutoff, None, None, ci_method, level)
+            rows.extend(nat_rows)
+            national_population = pop
+            national_m0 = _pick(nat_rows, "M0")
+
+            for idx, variable in enumerate(variables):
+                over_df = over_res[idx]
+                over_dicts = over_df.to_dicts()
+                over_dicts.sort(key=lambda r: str(r[variable]) if r[variable] is not None else "")
+                share_total = 0.0
+                weighted_m0 = 0.0
+                for row_dict in over_dicts:
+                    val = row_dict[variable]
+                    if val is None:
+                        continue
+                    subgroup = str(val)
+                    sub_pop = float(row_dict.get("__afmpi_cluster_weight") or 0.0)
+                    sub_obs = int(row_dict.get("__afmpi_cluster_rows") or 0)
+                    sub_ratios = tuple(
+                        linearization.RatioTotals(
+                            estimand=item,
+                            numerator=float(row_dict.get(linearization._NUMERATOR_PREFIX + prefix + item.key) or 0.0),
+                            denominator=float(row_dict.get(linearization._DENOMINATOR_PREFIX + prefix + item.key) or 0.0),
+                        )
+                        for item in raw_estimands
+                    )
+                    if not sub_pop and sub_ratios:
+                        sub_pop = sub_ratios[0].denominator
+                    sub_report = VarianceReport(values={k: 0.0 for k in keys}, degrees=degrees, population=sub_pop, observations=sub_obs)
+                    sub_rows = _context_rows(sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level)
+                    rows.extend(sub_rows)
+
+                    if national_population:
+                        share = sub_pop / national_population
+                        share_total += share
+                        subgroup_m0 = _pick(sub_rows, "M0")
+                        if subgroup_m0 is not None:
+                            weighted_m0 += share * subgroup_m0
+
+                if national_m0 is not None:
+                    decomposition.append({
+                        "k": cutoff,
+                        "over": variable,
+                        "shares": share_total,
+                        "M0": national_m0,
+                        "decomposed_M0": weighted_m0,
+                        "error": abs(weighted_m0 - national_m0),
+                    })
+        else:
+            ratios, report = _taylor_report(nat_sub, raw_estimands, tuple(item.key for item in raw_estimands), design)  # type: ignore[arg-type]
+            _check_report_diags(report, None, None, cutoff, ratios, design, ci_method, diag_rows)
+            nat_rows = _context_rows(ratios, report, cutoff, None, None, ci_method, level)
+            rows.extend(nat_rows)
+            national_population = report.population
+            national_m0 = _pick(nat_rows, "M0")
+
+            for idx, variable in enumerate(variables):
+                over_df = over_res[idx]
+                subgroups_list = sorted([str(v) for v in over_df.select(variable).unique().to_series().to_list() if v is not None])
+                share_total = 0.0
+                weighted_m0 = 0.0
+                for subgroup in subgroups_list:
+                    sub_sums = over_df.filter(pl.col(variable).cast(pl.String) == subgroup)
+                    sub_sub = _extract_cutoff_sums(sub_sums, raw_estimands, prefix)
+                    sub_ratios, sub_report = _taylor_report(sub_sub, raw_estimands, tuple(item.key for item in raw_estimands), design)  # type: ignore[arg-type]
+                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_ratios, design, ci_method, diag_rows)
+                    sub_rows = _context_rows(sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level)
+                    rows.extend(sub_rows)
+
+                    if national_population:
+                        share = sub_report.population / national_population
+                        share_total += share
+                        subgroup_m0 = _pick(sub_rows, "M0")
+                        if subgroup_m0 is not None:
+                            weighted_m0 += share * subgroup_m0
+
+                if national_m0 is not None:
+                    decomposition.append({
+                        "k": cutoff,
+                        "over": variable,
+                        "shares": share_total,
+                        "M0": national_m0,
+                        "decomposed_M0": weighted_m0,
+                        "error": abs(weighted_m0 - national_m0),
+                    })
+
+    estimates = pl.DataFrame(rows, schema=_ESTIMATE_SCHEMA)
+    decomposition_frame = pl.DataFrame(
+        decomposition,
+        schema={
+            "k": pl.Float64,
+            "over": pl.String,
+            "shares": pl.Float64,
+            "M0": pl.Float64,
+            "decomposed_M0": pl.Float64,
+            "error": pl.Float64,
+        },
+    )
+    if check_decomposability and decomposition_frame.height:
+        _assert_decomposable(decomposition_frame)
+
+    _DIAGNOSTICS_SCHEMA = {
+        "topic": pl.String,
+        "context": pl.String,
+        "decision": pl.String,
+        "detail": pl.String,
+    }
+    diagnostics_frame = pl.DataFrame(diag_rows, schema=_DIAGNOSTICS_SCHEMA).unique(maintain_order=True)
+
+    out_kind = "pandas" if input_kind == "pandas" else "polars"
+
+    return EstimationResult(
+        _estimates=estimates,
+        _decomposition=decomposition_frame,
+        _matrix=None,
+        _cutoffs=cutoffs,
+        _over=variables,
+        _domain=None,
+        _ci_method=ci_method,
+        _level=level,
+        _tvar=tvar,
+        _cot_year=cot_year,
+        _changes=None,
+        _overlap=overlap,
+        _panel_id=panel_id,
+        _diagnostics=diagnostics_frame,
+        observations=nat_rows[0]["obs"] if nat_rows else 0,
+        excluded_observations=0,
+        _input_kind=out_kind,
+        _design=design,
+    )
+
+
+def _extract_cutoff_sums(
+    sums: pl.DataFrame,
+    raw_estimands: tuple[estimands_module.RatioEstimand, ...],
+    prefix: str,
+) -> pl.DataFrame:
+    rename_map = {}
+    for item in raw_estimands:
+        old_num = linearization._NUMERATOR_PREFIX + prefix + item.key
+        new_num = linearization._NUMERATOR_PREFIX + item.key
+        old_den = linearization._DENOMINATOR_PREFIX + prefix + item.key
+        new_den = linearization._DENOMINATOR_PREFIX + item.key
+        if old_num in sums.columns:
+            rename_map[old_num] = new_num
+        if old_den in sums.columns:
+            rename_map[old_den] = new_den
+    return sums.rename(rename_map)
+
+
+def _add_design_identifiers_lazy(lf: pl.LazyFrame, design: Design) -> pl.LazyFrame:
+    if isinstance(design, CensusDesign):
+        return lf
+    if isinstance(design, SurveyDesign):
+        stages = design.resolved_stages
+        depth = max(1, len(stages))
+        exprs = []
+        if depth == 1 and not stages:
+            s_name = design.strata
+            p_name = design.psu
+            s_expr = pl.col(s_name).cast(pl.String) if s_name else pl.lit("__afmpi_all__")
+            p_expr = pl.col(p_name).cast(pl.String) if p_name else pl.int_range(0, pl.len()).cast(pl.String)
+            exprs.extend([
+                s_expr.alias(deprivation.STRATUM),
+                p_expr.alias(deprivation.PSU),
+                pl.lit(0.0).alias(deprivation.fraction_column(1)),
+            ])
+        else:
+            for idx, stage in enumerate(stages, start=1):
+                s_col = deprivation.stratum_column(idx)
+                p_col = deprivation.psu_column(idx)
+                f_col = deprivation.fraction_column(idx)
+                s_expr = pl.col(stage.strata).cast(pl.String) if stage.strata else pl.lit(f"__afmpi_all{idx}__")
+                p_expr = pl.col(stage.id).cast(pl.String)
+                exprs.extend([
+                    s_expr.alias(s_col),
+                    p_expr.alias(p_col),
+                    pl.lit(0.0).alias(f_col),
+                ])
+        return lf.with_columns(exprs)
+    return lf
+
+
+def _stage_group_columns_lazy(lf: pl.LazyFrame, design: Design) -> tuple[str, ...]:
+    if isinstance(design, CensusDesign):
+        return ()
+    if isinstance(design, SurveyDesign):
+        stages = design.resolved_stages
+        depth = max(1, len(stages))
+        cols: list[str] = []
+        for level in range(1, depth + 1):
+            cols.append(deprivation.stratum_column(level))
+            cols.append(deprivation.psu_column(level))
+            cols.append(deprivation.fraction_column(level))
+        return tuple(cols)
+    return ()
 
 
 def _stage_group_columns(frame: pl.DataFrame, design: SurveyDesign) -> tuple[str, ...]:
@@ -159,33 +681,42 @@ def _check_report_diags(
     ci_method: str,
     diag_rows: list[dict[str, str]],
 ) -> None:
-    if report.degrees.lonely_strata_keys:
-        strata_str = ", ".join(repr(s) for s in report.degrees.lonely_strata_keys)
-        ctx_parts = [f"k={cutoff_val}"]
-        if over_name:
-            ctx_parts.extend([f"over='{over_name}'", f"subgroup='{subgroup_name}'"])
-        ctx_str = ", ".join(ctx_parts)
-        diag_rows.append({
-            "topic": "lonely_psu",
-            "context": ctx_str,
-            "decision": getattr(design, "lonely_psu", "fail"),
-            "detail": f"Stratum/strata [{strata_str}] contain(s) a single PSU",
-        })
+    deg = report.degrees
+    ctx = f"k={cutoff_val}"
+    if over_name:
+        ctx += f", {over_name}={subgroup_name}"
 
-    if ci_method == "logit":
-        for ratio in ratios_tuple:
-            val = ratio.value
-            if val is not None and (val <= 0.0 or val >= 1.0):
-                ctx_parts = [f"measure='{ratio.estimand.measure}'", f"k={cutoff_val}"]
-                if over_name:
-                    ctx_parts.extend([f"over='{over_name}'", f"subgroup='{subgroup_name}'"])
-                ctx_str = ", ".join(ctx_parts)
-                diag_rows.append({
-                    "topic": "ci_logit",
-                    "context": ctx_str,
-                    "decision": "fallback_to_linear",
-                    "detail": f"estimate {val:.6g} on boundary [0, 1], fallback to linear CI",
-                })
+    if deg.lonely_strata > 0:
+        policy = getattr(design, "lonely_psu", "fail")
+        diag_rows.append(
+            {
+                "topic": "lonely_psu",
+                "context": ctx,
+                "decision": policy,
+                "detail": f"{deg.lonely_strata} lonely strata (keys: {deg.lonely_strata_keys}) handled by policy '{policy}'",
+            }
+        )
+
+    if deg.df < 1:
+        diag_rows.append(
+            {
+                "topic": "degrees_of_freedom",
+                "context": ctx,
+                "decision": "unestimated",
+                "detail": f"df={deg.df} < 1; standard errors are NaN",
+            }
+        )
+
+    for ratio in ratios_tuple:
+        if ratio.value is None:
+            diag_rows.append(
+                {
+                    "topic": "undefined_ratio",
+                    "context": ctx,
+                    "decision": "nan_estimate",
+                    "detail": f"estimand '{ratio.key}' has non-positive denominator ({ratio.denominator})",
+                }
+            )
 
 
 def _estimate_from_matrix(
@@ -193,87 +724,109 @@ def _estimate_from_matrix(
     *,
     cutoffs: tuple[float, ...],
     variables: tuple[str, ...],
-    tvar: str | None = None,
-    cot_year: str | None = None,
+    tvar: str | None,
+    cot_year: str | None,
     domain: str | pl.Expr | None,
     ci_method: str,
     level: float,
     check_decomposability: bool,
-    overlap: str = "auto",
-    panel_id: str | None = None,
+    overlap: str,
+    panel_id: str | None,
+    batch_size: int | None = None,
+    projected_columns: list[str] | None = None,
+    input_kind: str = "polars",
 ) -> EstimationResult:
-    frame = matrix.frame
     spec = matrix.spec
     design = matrix.design
+    frame = matrix.frame
+
+    diag_rows: list[dict[str, str]] = []
+
+    if projected_columns is not None:
+        diag_rows.append({
+            "topic": "projection_pushdown",
+            "context": "from_parquet",
+            "decision": "selected_columns",
+            "detail": ", ".join(sorted(projected_columns)),
+        })
 
     base = domain_module.POPULATION
     if domain is not None:
         base = domain_module.from_expression(domain)
         domain_module.validate(frame, base)
+        diag_rows.append(
+            {
+                "topic": "domain",
+                "context": str(domain),
+                "decision": "subpopulation_filter",
+                "detail": f"active rows: {frame.filter(base.weight() > 0).height}/{frame.height}",
+            }
+        )
+
     base_weight = base.weight()
 
     rows: list[dict[str, object]] = []
     decomposition: list[dict[str, object]] = []
-    diag_rows: list[dict[str, str]] = []
-
-    if matrix.excluded_observations > 0:
-        diag_rows.append({
-            "topic": "missing",
-            "context": "deprivation_matrix",
-            "decision": matrix.missing_report.policy,
-            "detail": f"{matrix.excluded_observations} observation(s) excluded by missing-value policy",
-        })
 
     if design.variance_path == "taylor":
-        group_cols = _stage_group_columns(frame, design)  # type: ignore[arg-type]
-        universe = frame.select(list(group_cols)).unique(maintain_order=True)
-        subgroups = {
-            variable: domain_module.levels(frame, variable) for variable in variables
-        }
+        survey_design: SurveyDesign = design  # type: ignore[assignment]
+        group_cols = _stage_group_columns(frame, survey_design)
 
         for cutoff in cutoffs:
             estimands = estimands_module.build(spec, cutoff)
             keys = tuple(item.key for item in estimands)
 
-            national_sums = linearization.cluster_sums(
-                frame, estimands, base_weight, group_columns=group_cols
+            if base.is_population:
+                national_sums = linearization.cluster_sums(
+                    frame, estimands, weight=base_weight, group_columns=group_cols
+                )
+            else:
+                w_dom = base_weight
+                national_sums = linearization.cluster_sums(
+                    frame, estimands, weight=w_dom, group_columns=group_cols
+                )
+
+            national_point, national_report = _taylor_report(
+                national_sums, estimands, keys, survey_design
             )
-            ratios, report = _taylor_report(
-                national_sums, estimands, keys, design  # type: ignore[arg-type]
+            _check_report_diags(national_report, None, None, cutoff, national_point, design, ci_method, diag_rows)
+            national_rows = _context_rows(
+                national_point, national_report, cutoff, None, None, ci_method, level
             )
-            _check_report_diags(report, None, None, cutoff, ratios, design, ci_method, diag_rows)
-            national = _context_rows(
-                ratios, report, cutoff, None, None, ci_method, level
-            )
-            rows.extend(national)
-            national_population = national[0]["population"] if national else 0.0
-            national_m0 = _pick(national, "M0")
+            rows.extend(national_rows)
+
+            national_population = national_report.population
+            national_m0 = _pick(national_rows, "M0")
 
             for variable in variables:
-                cells = linearization.cluster_sums(
-                    frame,
-                    estimands,
-                    base_weight,
-                    group_columns=group_cols + (variable,),
-                )
+                subgroups_list = domain_module.levels(frame, variable)
                 share_total = 0.0
                 weighted_m0 = 0.0
-                for subgroup in subgroups[variable]:
-                    sums = _align(cells, universe, variable, subgroup, group_cols)
-                    sub_ratios, sub_report = _taylor_report(
-                        sums, estimands, keys, design  # type: ignore[arg-type]
+
+                for subgroup in subgroups_list:
+                    sub_weight = base_weight * (pl.col(variable).cast(pl.String) == subgroup).cast(pl.Float64)
+                    sub_sums = linearization.cluster_sums(
+                        frame,
+                        estimands,
+                        weight=sub_weight,
+                        group_columns=group_cols,
                     )
-                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_ratios, design, ci_method, diag_rows)
-                    subgroup_rows = _context_rows(
-                        sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level
+                    sub_point, sub_report = _taylor_report(
+                        sub_sums, estimands, keys, survey_design
                     )
-                    rows.extend(subgroup_rows)
+                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_point, design, ci_method, diag_rows)
+                    sub_rows = _context_rows(
+                        sub_point, sub_report, cutoff, variable, subgroup, ci_method, level
+                    )
+                    rows.extend(sub_rows)
+
                     if national_population:
-                        share = subgroup_rows[0]["population"] / national_population
+                        share = sub_report.population / national_population
                         share_total += share
-                        subgroup_m0 = _pick(subgroup_rows, "M0")
+                        subgroup_m0 = _pick(sub_rows, "M0")
                         if subgroup_m0 is not None:
                             weighted_m0 += share * subgroup_m0
+
                 if national_m0 is not None:
                     decomposition.append(
                         {
@@ -285,17 +838,16 @@ def _estimate_from_matrix(
                             "error": abs(weighted_m0 - national_m0),
                         }
                     )
+
     elif design.variance_path == "replication":
         rep_design: ReplicateDesign = design  # type: ignore[assignment]
-
+        effective_batch_size = batch_size if batch_size is not None else 64
         if rep_design.replicate_weights is None:
             frame_work, repw_cols, scale, rscales = generate_replicate_weights(
                 frame, rep_design
             )
             if rep_design.method == "JKn" and rep_design.strata is not None:
-                H = frame_work.select(
-                    pl.col(rep_design.strata).cast(pl.String)
-                ).n_unique()
+                H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
             else:
                 H = 1
             rep_design_active = ReplicateDesign(
@@ -314,89 +866,56 @@ def _estimate_from_matrix(
             )
         else:
             frame_work = frame
-            repw_cols = rep_design.replicate_weights
-            R = len(repw_cols)
-            if rep_design.scale is not None:
-                scale = rep_design.scale
-            elif rep_design.method == "JK1":
-                scale = (R - 1) / R
-            elif rep_design.method == "BRR":
-                scale = 1.0 / R
-            elif rep_design.method == "Fay_BRR":
-                rho = rep_design.fay if rep_design.fay is not None else 0.5
-                scale = 1.0 / (R * ((1.0 - rho) ** 2))
-            elif rep_design.method == "SDR":
-                scale = 4.0 / R
-            elif rep_design.method == "bootstrap":
-                scale = 1.0 / R
-            else:  # JKn
-                scale = 1.0
-
+            scale = rep_design.scale if rep_design.scale is not None else 1.0
             rscales = (
                 rep_design.rscales
                 if rep_design.rscales is not None
-                else ((1.0,) * R)
+                else ((1.0,) * len(rep_design.replicate_weights))
             )
             if rep_design.method == "JKn" and rep_design.strata is not None:
-                H = frame_work.select(
-                    pl.col(rep_design.strata).cast(pl.String)
-                ).n_unique()
+                H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
             else:
                 H = 1
-            rep_design_active = ReplicateDesign(
-                weights=rep_design.weights,
-                household_size=rep_design.household_size,
-                replicate_weights=repw_cols,
-                method=rep_design.method,
-                strata=rep_design.strata,
-                psu=rep_design.psu,
-                fay=rep_design.fay,
-                scale=scale,
-                rscales=rscales,
-                combined_weights=rep_design.combined_weights,
-                mse=rep_design.mse,
-                degf=rep_design.degf,
-            )
-
-        R = len(rep_design_active.replicate_weights)
-        df_strata = (
-            H
-            if (
-                rep_design.method == "JKn"
-                and (
-                    rep_design.strata is not None
-                    or rep_design.replicate_weights is None
-                )
-            )
-            else 1
-        )
-        degrees = DesignDegrees(
-            psus=R, strata=df_strata, lonely_strata=0, override_df=rep_design.degf
-        )
+            rep_design_active = rep_design
 
         rep_weight_exprs = replicate_weight_expressions(rep_design_active, frame_work)
+        R = len(rep_weight_exprs)
+        df_strata = H if (rep_design.method == "JKn" and (rep_design.strata is not None or rep_design.replicate_weights is None)) else 1
+        degrees = DesignDegrees(
+            psus=R,
+            strata=df_strata,
+            lonely_strata=0,
+            override_df=rep_design.degf,
+        )
 
         for cutoff in cutoffs:
             estimands = estimands_module.build(spec, cutoff)
             keys = tuple(item.key for item in estimands)
 
-            national_point = linearization.totals(frame_work, estimands, weight=base_weight)
-            pop = float(frame_work.select(base_weight.sum()).item() or 0.0)
-            obs = int(frame_work.filter(base_weight > 0).height)
-
+            national_point = linearization.totals(
+                frame_work, estimands, weight=base_weight
+            )
             national_reps = replicate_totals(
-                frame_work, estimands, rep_weight_exprs, batch_size=64
+                frame_work,
+                estimands,
+                [w * (base_weight > 0).cast(pl.Float64) for w in rep_weight_exprs],
+                batch_size=effective_batch_size,
             )
             national_vars = replicate_variance(
                 national_point,
                 national_reps,
                 keys,
-                scale=rep_design_active.scale,
-                rscales=rep_design_active.rscales,
+                scale=scale,
+                rscales=rscales,
                 mse=rep_design_active.mse,
             )
+            pop = float(frame_work.select(base_weight.sum()).item() or 0.0)
+            obs = int(frame_work.filter(base_weight > 0).height)
             national_report = VarianceReport(
-                values=national_vars, degrees=degrees, population=pop, observations=obs
+                values=national_vars,
+                degrees=degrees,
+                population=pop,
+                observations=obs,
             )
             _check_report_diags(national_report, None, None, cutoff, national_point, design, ci_method, diag_rows)
             national_rows = _context_rows(
@@ -413,7 +932,7 @@ def _estimate_from_matrix(
                     estimands,
                     rep_weight_exprs,
                     group_column=variable,
-                    batch_size=64,
+                    batch_size=effective_batch_size,
                 )
                 subgroups_list = domain_module.levels(frame_work, variable)
                 share_total = 0.0
@@ -434,8 +953,8 @@ def _estimate_from_matrix(
                         sub_point,
                         sub_reps,
                         keys,
-                        scale=rep_design_active.scale,
-                        rscales=rep_design_active.rscales,
+                        scale=scale,
+                        rscales=rscales,
                         mse=rep_design_active.mse,
                     )
                     sub_report = VarianceReport(
@@ -592,6 +1111,8 @@ def _estimate_from_matrix(
         _diagnostics=diagnostics_frame,
         observations=matrix.observations,
         excluded_observations=matrix.excluded_observations,
+        _input_kind=matrix.input_kind,
+        _design=design,
     )
 
 
@@ -668,71 +1189,83 @@ def _context_rows(
 def _align(
     cells: pl.DataFrame,
     universe: pl.DataFrame,
-    variable: str,
-    subgroup: str,
-    group_columns: tuple[str, ...],
+    over: str | None,
+    subgroup: str | None,
+    group_cols: tuple[str, ...],
 ) -> pl.DataFrame:
-    """Restrict per-cluster sums to one level, keeping every design cluster."""
-
-    selected = cells.filter(pl.col(variable).cast(pl.String) == pl.lit(subgroup)).drop(
-        variable
+    if over is not None and subgroup is not None:
+        sub_cells = cells.filter(pl.col(over).cast(pl.String) == subgroup)
+    else:
+        sub_cells = cells
+    joined = universe.join(sub_cells, on=list(group_cols), how="left")
+    value_cols = [c for c in joined.columns if c not in group_cols and c != over]
+    return joined.select(
+        *group_cols,
+        *[pl.col(c).fill_null(0.0).alias(c) for c in value_cols],
     )
-    value_columns = [column for column in selected.columns if column not in group_columns]
-    aligned = universe.join(selected, on=list(group_columns), how="left")
-    return aligned.with_columns(
-        [pl.col(column).fill_null(0).alias(column) for column in value_columns]
-    )
 
 
-def _pick(rows: list[dict[str, object]], measure: str) -> float | None:
-    for row in rows:
-        if row["measure"] == measure:
-            return row["est"]
-    return None
-
-
-def _assert_decomposable(frame: pl.DataFrame) -> None:
-    worst = frame.filter(pl.col("error") == pl.col("error").max()).row(0, named=True)
-    if worst["error"] > DECOMPOSITION_TOLERANCE:
-        raise ValueError(
-            "decomposability check failed: sum_l phi_l * M0_l = "
-            f"{worst['decomposed_M0']!r} but M0 = {worst['M0']!r} "
-            f"(over={worst['over']!r}, k={worst['k']!r}, "
-            f"difference {worst['error']:.3e} > {DECOMPOSITION_TOLERANCE:.0e})"
-        )
+def _filter_subgroup_sums(
+    cells: pl.DataFrame,
+    over: str,
+    subgroup: str,
+    group_cols: tuple[str, ...],
+) -> pl.DataFrame:
+    sub = cells.filter(pl.col(over).cast(pl.String) == subgroup)
+    keep = [c for c in sub.columns if c != over]
+    return sub.select(*keep)
 
 
 def _validate_cutoffs(k: float | Sequence[float]) -> tuple[float, ...]:
-    values = [k] if isinstance(k, (Real, bool)) else list(k)
-    if not values:
-        raise ValueError("k must contain at least one cutoff")
-    cutoffs: list[float] = []
-    for value in values:
-        if isinstance(value, bool) or not isinstance(value, Real):
-            raise TypeError("k must be a real number between 0 and 1")
-        cutoff = float(value)
-        if not isfinite(cutoff) or not 0 <= cutoff <= 1:
-            raise ValueError("k must be finite and between 0 and 1, inclusive")
-        cutoffs.append(cutoff)
-    if len(set(cutoffs)) != len(cutoffs):
-        raise ValueError(f"k contains duplicate cutoffs: {cutoffs}")
-    return tuple(cutoffs)
+    if isinstance(k, Real):
+        k_list = [float(k)]
+    elif isinstance(k, (list, tuple)):
+        k_list = [float(val) for val in k]
+        if not k_list:
+            raise ValueError("at least one cutoff must be specified")
+        if len(k_list) != len(set(k_list)):
+            raise ValueError(f"duplicate cutoffs: {k_list}")
+    else:
+        raise TypeError("k must be a float or sequence of floats")
+    for val in k_list:
+        if not (0 <= val <= 1):
+            raise ValueError("k values must be between 0 and 1, inclusive")
+    return tuple(sorted(set(k_list)))
 
 
 def _validate_over(over: str | Sequence[str] | None) -> tuple[str, ...]:
     if over is None:
         return ()
-    variables = [over] if isinstance(over, str) else list(over)
-    for variable in variables:
-        if not isinstance(variable, str) or not variable.strip():
-            raise ValueError("over must contain non-empty column names")
-    if len(set(variables)) != len(variables):
-        raise ValueError(f"over contains duplicate variables: {variables}")
-    return tuple(variables)
+    if isinstance(over, str):
+        return (over,)
+    if isinstance(over, (list, tuple)):
+        if len(over) != len(set(over)):
+            raise ValueError(f"duplicate variables in over: {over}")
+        return tuple(over)
+    raise TypeError("over must be a column name or sequence of column names")
+
+
+def _pick(rows: list[dict[str, object]], measure: str) -> float | None:
+    for row in rows:
+        if row["measure"] == measure:
+            val = row["est"]
+            return float(val) if val is not None else None
+    return None
+
+
+def _assert_decomposable(decomposition: pl.DataFrame) -> None:
+    for row in decomposition.iter_rows(named=True):
+        if abs(row["shares"] - 1.0) > 1e-4:
+            raise ValueError(f"subgroup population shares sum to {row['shares']}, not 1")
+        if row["error"] > DECOMPOSITION_TOLERANCE:
+            raise ValueError(
+                f"decomposability broken for over={row['over']!r}: M0={row['M0']}, "
+                f"sum_l(phi_l * M0_l)={row['decomposed_M0']} (diff={row['error']})"
+            )
 
 
 def _compute_vcov(
-    matrix: DeprivationMatrix,
+    matrix: DeprivationMatrix | None,
     *,
     cutoffs: tuple[float, ...],
     over_vars: tuple[str, ...],
@@ -741,7 +1274,18 @@ def _compute_vcov(
     subgroup: str | None = None,
     measures: Sequence[str] | None = None,
     convert_fn=None,
+    design: Design | None = None,
 ) -> pl.DataFrame:
+    resolved_design = design if design is not None else (matrix.design if matrix is not None else None)
+    if resolved_design is not None and getattr(resolved_design, "variance_path", None) == "census":
+        measures_tuple = ("H", "A", "M0") if measures is None else tuple(measures)
+        matrix_rows = [{"term": m1, **{m2: 0.0 for m2 in measures_tuple}} for m1 in measures_tuple]
+        res_df = pl.DataFrame(matrix_rows)
+        return convert_fn(res_df) if convert_fn else res_df
+
+    if matrix is None:
+        raise ValueError("vcov() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming")
+
     if k is None:
         if len(cutoffs) == 1:
             k = cutoffs[0]
@@ -762,7 +1306,7 @@ def _compute_vcov(
             raise ValueError(f"subgroup must be specified when over={over!r}")
 
     spec = matrix.spec
-    design = matrix.design
+    design_to_use = matrix.design
     frame = matrix.frame
     estimands = estimands_module.build(spec, k)
     estimand_map = {item.key: item for item in estimands}
@@ -771,8 +1315,9 @@ def _compute_vcov(
         if m not in estimand_map:
             raise ValueError(f"unknown measure key: {m!r}")
 
-    if design.variance_path == "taylor":
-        group_cols = _stage_group_columns(frame, design)  # type: ignore[arg-type]
+    if design_to_use.variance_path == "taylor":
+        survey_design_use: SurveyDesign = design_to_use  # type: ignore[assignment]
+        group_cols = _stage_group_columns(frame, survey_design_use)
         universe = frame.select(list(group_cols)).unique(maintain_order=True)
 
         if over is None and subgroup is None:
@@ -784,10 +1329,10 @@ def _compute_vcov(
         ratios = linearization.totals_from_clusters(sums, estimands)
         inf = linearization.cluster_influence(sums, ratios)
         deg = design_degrees(inf)
-        vcov_dict, _ = design_vcov(inf, measures_tuple, deg, design)  # type: ignore[arg-type]
+        vcov_dict, _ = design_vcov(inf, measures_tuple, deg, design_to_use)  # type: ignore[arg-type]
 
-    elif design.variance_path == "replication":
-        rep_design: ReplicateDesign = design  # type: ignore[assignment]
+    elif design_to_use.variance_path == "replication":
+        rep_design: ReplicateDesign = design_to_use  # type: ignore[assignment]
         if rep_design.replicate_weights is None:
             frame_work, repw_cols, scale, rscales = generate_replicate_weights(frame, rep_design)
             rep_design_active = ReplicateDesign(
@@ -823,7 +1368,7 @@ def _compute_vcov(
 
         vcov_dict = replicate_vcov(point, replicates_list, measures_tuple, scale=scale, rscales=rscales, mse=rep_design_active.mse)
 
-    else:  # Census
+    else:
         vcov_dict = {(k1, k2): 0.0 for k1 in measures_tuple for k2 in measures_tuple}
 
     matrix_rows = []
@@ -843,7 +1388,7 @@ def _compute_vcov(
 
 
 def _compute_test(
-    matrix: DeprivationMatrix,
+    matrix: DeprivationMatrix | None,
     *,
     cutoffs: tuple[float, ...],
     a: object,
@@ -852,6 +1397,11 @@ def _compute_test(
     k: float | None = None,
     dist: str = "F",
 ) -> HypothesisTest:
+    if matrix is not None and getattr(matrix.design, "variance_path", None) == "census":
+        raise ValueError("a census has no sampling variance; a Wald test is not defined")
+    if matrix is None:
+        raise ValueError("test() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming")
+
     if k is None:
         if len(cutoffs) == 1:
             k = cutoffs[0]
@@ -860,17 +1410,15 @@ def _compute_test(
     if k not in cutoffs:
         raise ValueError(f"cutoff {k} was not estimated; available cutoffs are {cutoffs}")
 
-    if dist not in ("F", "chisq"):
-        raise ValueError(f"dist must be 'F' or 'chisq'; got {dist!r}")
-
     spec = matrix.spec
     design = matrix.design
     frame = matrix.frame
 
-    estimands = estimands_module.build(spec, k)
-    estimand_map = {item.key: item for item in estimands}
-    if measure not in estimand_map:
-        raise ValueError(f"unknown measure: {measure!r}")
+    if getattr(design, "variance_path", None) == "census":
+        raise ValueError("a census has no sampling variance; a Wald test is not defined")
+
+    if dist not in ("F", "chisq"):
+        raise ValueError(f"dist must be 'F' or 'chisq'; got {dist!r}")
 
     def _parse_arg(arg: object) -> tuple[domain_module.Domain, str]:
         if isinstance(arg, tuple):
@@ -886,13 +1434,17 @@ def _compute_test(
             raise TypeError(f"domain argument must be a string expression or (over, subgroup) tuple; got {arg!r}")
 
     dom_a, label_a = _parse_arg(a)
-
     if b is not None:
         dom_b, label_b = _parse_arg(b)
         terms = (label_a, label_b)
     else:
         dom_b = None
         terms = (label_a,)
+
+    estimands = estimands_module.build(spec, k)
+    estimand_map = {item.key: item for item in estimands}
+    if measure not in estimand_map:
+        raise ValueError(f"unknown measure: {measure!r}")
 
     target_item = estimand_map[measure]
 
@@ -1006,20 +1558,8 @@ def _compute_test(
             v_bb = 0.0
             v_ab = 0.0
 
-    else:  # Census
-        w_a = dom_a.weight()
-        pt_a = linearization.totals(frame, (target_item,), weight=w_a)[0]
-        theta_a = pt_a.value
-        if dom_b is not None:
-            w_b = dom_b.weight()
-            pt_b = linearization.totals(frame, (target_item,), weight=w_b)[0]
-            theta_b = pt_b.value
-        else:
-            theta_b = None
-        v_aa = 0.0
-        v_bb = 0.0
-        v_ab = 0.0
-        full_degrees = DesignDegrees(psus=0, strata=0, lonely_strata=0, override_df=0)
+    else:
+        raise ValueError("a census has no sampling variance; a Wald test is not defined")
 
     df2 = full_degrees.df
     q = 1
@@ -1032,12 +1572,12 @@ def _compute_test(
         var_contrast = v_aa
 
     if (dom_b is not None and label_a == label_b) or (diff == 0.0 and var_contrast == 0.0):
-        estimate = 0.0 if dom_b is not None else theta_a
+        estimate_val = 0.0 if dom_b is not None else theta_a
         se = 0.0
         statistic = 0.0
         p_value = 1.0
     else:
-        estimate = float(diff)
+        estimate_val = float(diff)
         if var_contrast < 0 or not isfinite(var_contrast):
             se = float("nan")
             statistic = float("nan")
@@ -1048,7 +1588,7 @@ def _compute_test(
                 statistic = float("nan")
                 p_value = float("nan")
             else:
-                W = (estimate ** 2) / var_contrast
+                W = (estimate_val ** 2) / var_contrast
                 if dist == "F":
                     statistic = float(W / q)
                     p_value = float(stats.f.sf(statistic, q, df2))
@@ -1058,7 +1598,7 @@ def _compute_test(
 
     return HypothesisTest(
         terms=terms,
-        estimate=estimate,
+        estimate=estimate_val,
         se=se,
         statistic=statistic,
         df1=q,
@@ -1069,5 +1609,4 @@ def _compute_test(
     )
 
 
-__all__ = ["DECOMPOSITION_TOLERANCE", "VarianceReport", "_compute_test", "_compute_vcov", "estimate"]
-
+__all__ = ["DECOMPOSITION_TOLERANCE", "LazyEstimation", "VarianceReport", "_compute_test", "_compute_vcov", "estimate"]

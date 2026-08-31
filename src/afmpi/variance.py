@@ -535,6 +535,8 @@ def confidence_interval(
         raise ValueError("level must be strictly between 0 and 1")
     if estimate is None or se is None or not isfinite(se):
         return (nan, nan)
+    if se == 0.0:
+        return (estimate, estimate)
 
     tail = 0.5 + level / 2
     if method == "normal":
@@ -559,6 +561,8 @@ def confidence_interval(
 def coefficient_of_variation(estimate: float | None, se: float) -> float:
     """``se / estimate``, the usual relative-precision diagnostic."""
 
+    if se == 0.0:
+        return 0.0
     if estimate is None or not isfinite(se) or estimate == 0:
         return nan
     return se / estimate
