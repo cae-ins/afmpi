@@ -9,6 +9,39 @@ Conformément à la discipline méthodologique du projet, tout écart numérique
 
 ---
 
+## [1.0.0] - 2026-08-31
+
+### Added
+- **Packaging, documentation et intégration continue (§14.11)** : `CHANGELOG.md`,
+  `docs/quickstart.md` (un exemple par famille de design), tableau comparatif des trois familles
+  de design et note explicite sur `lonely_psu="fail"` (contraste avec R `survey`) dans le
+  `README.md`.
+- **CI étendue** : job `windows-latest` (plateforme de développement réelle) en plus de la
+  matrice `ubuntu-latest` Python 3.10/3.11/3.12 ; `ruff check` intégré à chaque exécution ; les
+  tests marqués `slow` (benchmark 10M lignes) ne tournent que sur `main` et sur les tags.
+- **Lint `ruff`** : `line-length = 96`, `target-version = "py310"`, règles `E`, `F`, `I`, `UP`,
+  `B` — aucune désactivée. Base de code corrigée pour passer sans erreur.
+- **Test de cohérence de version** (`tests/test_packaging.py`) : vérifie que `afmpi.__version__`
+  et le `version` de `pyproject.toml` restent synchronisés (§14.12 point 1).
+
+### Changed
+- **Numéro de version : `1.0.0`** (`pyproject.toml` et `afmpi.__version__`, désynchronisés
+  jusqu'ici à `0.4.0`/`0.3.0` — corrigé et synchronisé). Franchi conformément à la règle explicite
+  de PLAN.md §14.12 : `1.0.0` est un engagement de stabilité d'API, réservé au moment où la suite
+  de conformité statistique (phase 10) est verte sur **toutes** les familles de design — c'est le
+  cas depuis le commit de la phase 10 (10/10 familles conformes à R `survey`, comparaisons Stata
+  `mpitb` correctement marquées optionnelles et sautées, aucune non tenue).
+- `pyproject.toml` : classificateur PyPI `Development Status` passé de `3 - Alpha` à
+  `5 - Production/Stable`, cohérent avec l'engagement `1.0.0`.
+
+### Fixed
+- **Écart introduit puis corrigé pendant le stamp de la phase 11** : l'agent avait reformaté à
+  tort le code Python à l'intérieur des blocs d'exemple de `PLAN.md` (jusqu'à changer `1/3` en
+  `1 / 3` dans un commentaire), hors périmètre du brief — modification annulée avant commit,
+  `PLAN.md` inchangé depuis la phase 10.
+
+---
+
 ## [0.4.0] - 2026-08-31
 
 ### Added
