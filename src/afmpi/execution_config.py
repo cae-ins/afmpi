@@ -20,8 +20,19 @@ class ExecutionConfig:
         so it never overrides a value already in place), but this only takes effect
         if this call happens to be the first Polars operation in the process; a
         mismatched later request emits a ``UserWarning`` instead of silently doing
-        nothing. There is no per-call thread isolation -- two concurrent
-        ``estimate()`` calls in the same process cannot each get their own cap.
+        nothing. There is no per-call thread isolation in the *current* process --
+        two concurrent ``estimate()`` calls in the same process cannot each get their
+        own cap. Set ``isolated_process=True`` for a hard guarantee instead.
+    isolated_process : bool, optional
+        When ``True``, runs the estimation in a freshly spawned Python subprocess
+        (``subprocess.run([sys.executable, "-c", ...])``, not ``fork``) where
+        ``POLARS_MAX_THREADS`` is set *before* Polars is ever imported -- this is
+        the only way to actually guarantee ``max_threads`` regardless of what else
+        has already run Polars in the current process. Measured real cost on this
+        machine: **~2.8s** fixed overhead per call (fresh interpreter start plus
+        importing pandas/polars/scipy in the child, and pickling the input/output) --
+        not free, and not worth it for small calls. Does not affect ``memory_limit``
+        or ``spill_dir``, which remain no-ops below.
     memory_limit : str | None, optional
         Currently a no-op in this version of afmpi. Polars does not provide a
         per-query strict memory cap API. Passing a non-None value emits a warning.
@@ -34,6 +45,7 @@ class ExecutionConfig:
     """
 
     max_threads: int | None = None
+    isolated_process: bool = False
     memory_limit: str | None = None
     spill_dir: str | None = None
     batch_size: int | None = None

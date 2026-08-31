@@ -55,6 +55,41 @@ def test_replication_conformity():
             assert row["df"] == val["df"], f"Mismatch in {suffix}_{method} df"
 
 
+def test_replication_conformity_lazy():
+    """Verify all six replicate weight methods on lazy path against R survey reference."""
+    ref_file = REF_DIR / "replication.json"
+    with open(ref_file) as f:
+        ref = json.load(f)
+
+    tol = ref["tolerance"]
+    df_rep = generate_replication(ref["generator_seed"])
+    spec = Specification({"d": ["i0", "i1", "i2", "i3"]})
+
+    rep_designs = {
+        "JK1": ReplicateDesign(weights="w", psu="psu", method="JK1"),
+        "JKn": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="JKn"),
+        "BRR": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR"),
+        "Fay_BRR": ReplicateDesign(
+            weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5
+        ),
+        "bootstrap": ReplicateDesign(
+            weights="w", strata="stratum", psu="psu", method="bootstrap", seed=42, replicates=20
+        ),
+        "SDR": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="SDR"),
+    }
+
+    for method, des in rep_designs.items():
+        res = estimate(df_rep, spec, des, k=1 / 3, lazy=True, streaming=True).collect()
+        estimates = res.estimates()
+
+        for suffix in ["H", "M0", "A"]:
+            val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_{method}")
+            row = estimates.filter(pl.col("measure") == suffix).row(0, named=True)
+            assert row["est"] == pytest.approx(val["est"], abs=tol["est"])
+            assert row["se"] == pytest.approx(val["se"], abs=tol["se"])
+            assert row["df"] == val["df"]
+
+
 @pytest.mark.optional
 def test_replication_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""

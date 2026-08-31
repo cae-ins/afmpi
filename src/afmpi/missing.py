@@ -38,6 +38,118 @@ class MissingReport:
     per_indicator: pl.DataFrame  # indicator, missing, missing_share
 
 
+def apply_transform(
+    frame: pl.DataFrame | pl.LazyFrame, spec: Specification
+) -> pl.DataFrame | pl.LazyFrame:
+    """Apply missing-value policy transformations to a DataFrame or LazyFrame."""
+
+    weights = spec.indicator_weights
+    indicators = spec.indicators
+    policy = spec.missing_policy
+
+    if isinstance(policy, str):
+        if policy == "listwise_deletion":
+            complete = pl.all_horizontal([pl.col(item).is_not_null() for item in indicators])
+            out_frame = frame.filter(complete)
+            contributions = [
+                (pl.col(item).cast(pl.Float64) * weights[item]).alias(
+                    contribution_column(index)
+                )
+                for index, item in enumerate(indicators)
+            ]
+            g_cols = [
+                pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            obs_cols = [
+                pl.col(item).is_not_null().cast(pl.Float64).alias(observed_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            out_frame = out_frame.with_columns(*contributions, *g_cols, *obs_cols)
+            out_frame = out_frame.with_columns(
+                pl.sum_horizontal(
+                    [pl.col(contribution_column(index)) for index in range(len(indicators))]
+                ).alias(SCORE)
+            )
+            return out_frame
+
+        elif policy == "reweighting":
+            observed_weight = pl.sum_horizontal(
+                [
+                    pl.when(pl.col(item).is_not_null()).then(weights[item]).otherwise(0.0)
+                    for item in indicators
+                ]
+            )
+            out_frame = frame.filter(observed_weight > 0)
+            contributions = [
+                pl.when(pl.col(item).is_not_null())
+                .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
+                .otherwise(0.0)
+                .alias(contribution_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            g_cols = [
+                pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            obs_cols = [
+                pl.col(item).is_not_null().cast(pl.Float64).alias(observed_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            out_frame = out_frame.with_columns(*contributions, *g_cols, *obs_cols)
+            out_frame = out_frame.with_columns(
+                pl.sum_horizontal(
+                    [pl.col(contribution_column(index)) for index in range(len(indicators))]
+                ).alias(SCORE)
+            )
+            return out_frame
+
+        elif policy == "treat_as_nondeprived":
+            out_frame = frame
+            g_cols = [
+                pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            contributions = [
+                (pl.col(deprived_column(index)) * weights[item]).alias(
+                    contribution_column(index)
+                )
+                for index, item in enumerate(indicators)
+            ]
+            obs_cols = [
+                pl.lit(1.0, dtype=pl.Float64).alias(observed_column(index))
+                for index, item in enumerate(indicators)
+            ]
+            out_frame = out_frame.with_columns(*g_cols, *obs_cols)
+            out_frame = out_frame.with_columns(*contributions)
+            out_frame = out_frame.with_columns(
+                pl.sum_horizontal(
+                    [pl.col(contribution_column(index)) for index in range(len(indicators))]
+                ).alias(SCORE)
+            )
+            return out_frame
+        else:
+            raise ValueError(f"unknown string missing_policy: {policy!r}")
+
+    elif callable(policy):
+        res = policy(frame, spec)
+        if not isinstance(res, (pl.DataFrame, pl.LazyFrame)):
+            raise TypeError(
+                "custom missing_policy must return a polars DataFrame or LazyFrame, "
+                f"got {type(res)}"
+            )
+        if isinstance(res, pl.DataFrame):
+            _validate_custom_policy_output(res, spec, indicators)
+        out_frame = res.with_columns(
+            pl.sum_horizontal(
+                [pl.col(contribution_column(index)) for index in range(len(indicators))]
+            ).alias(SCORE)
+        )
+        return out_frame
+    else:
+        raise TypeError(f"missing_policy must be string or callable, got {type(policy)}")
+
+
 def apply(frame: pl.DataFrame, spec: Specification) -> tuple[pl.DataFrame, MissingReport]:
     """Add ``g_ij``, observation flags, ``w_j * g_ij`` and ``c_i`` per policy.
 
@@ -46,7 +158,6 @@ def apply(frame: pl.DataFrame, spec: Specification) -> tuple[pl.DataFrame, Missi
     ``treat_as_nondeprived`` treats missing values as non-deprived (g_ij=0, observed=1).
     A custom callable receives ``(frame, spec)`` and returns a DataFrame.
     """
-    weights = spec.indicator_weights
     indicators = spec.indicators
     rows_in = frame.height
 
@@ -73,105 +184,8 @@ def apply(frame: pl.DataFrame, spec: Specification) -> tuple[pl.DataFrame, Missi
         policy if isinstance(policy, str) else getattr(policy, "__name__", str(policy))
     )
 
-    if isinstance(policy, str):
-        if policy == "listwise_deletion":
-            complete = pl.all_horizontal([pl.col(item).is_not_null() for item in indicators])
-            out_frame = frame.filter(complete)
-            contributions = [
-                (pl.col(item).cast(pl.Float64) * weights[item]).alias(
-                    contribution_column(index)
-                )
-                for index, item in enumerate(indicators)
-            ]
-            g_cols = [
-                pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            obs_cols = [
-                pl.col(item).is_not_null().cast(pl.Float64).alias(observed_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            if out_frame.height > 0:
-                out_frame = out_frame.with_columns(*contributions, *g_cols, *obs_cols)
-                out_frame = out_frame.with_columns(
-                    pl.sum_horizontal(
-                        [pl.col(contribution_column(index)) for index in range(len(indicators))]
-                    ).alias(SCORE)
-                )
-
-        elif policy == "reweighting":
-            observed_weight = pl.sum_horizontal(
-                [
-                    pl.when(pl.col(item).is_not_null()).then(weights[item]).otherwise(0.0)
-                    for item in indicators
-                ]
-            )
-            out_frame = frame.filter(observed_weight > 0)
-            contributions = [
-                pl.when(pl.col(item).is_not_null())
-                .then(pl.col(item).cast(pl.Float64) * weights[item] / observed_weight)
-                .otherwise(0.0)
-                .alias(contribution_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            g_cols = [
-                pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            obs_cols = [
-                pl.col(item).is_not_null().cast(pl.Float64).alias(observed_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            if out_frame.height > 0:
-                out_frame = out_frame.with_columns(*contributions, *g_cols, *obs_cols)
-                out_frame = out_frame.with_columns(
-                    pl.sum_horizontal(
-                        [pl.col(contribution_column(index)) for index in range(len(indicators))]
-                    ).alias(SCORE)
-                )
-
-        elif policy == "treat_as_nondeprived":
-            out_frame = frame
-            g_cols = [
-                pl.col(item).cast(pl.Float64).fill_null(0.0).alias(deprived_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            contributions = [
-                (pl.col(deprived_column(index)) * weights[item]).alias(
-                    contribution_column(index)
-                )
-                for index, item in enumerate(indicators)
-            ]
-            obs_cols = [
-                pl.lit(1.0, dtype=pl.Float64).alias(observed_column(index))
-                for index, item in enumerate(indicators)
-            ]
-            if out_frame.height > 0:
-                out_frame = out_frame.with_columns(*g_cols, *obs_cols)
-                out_frame = out_frame.with_columns(*contributions)
-                out_frame = out_frame.with_columns(
-                    pl.sum_horizontal(
-                        [pl.col(contribution_column(index)) for index in range(len(indicators))]
-                    ).alias(SCORE)
-                )
-        else:
-            raise ValueError(f"unknown string missing_policy: {policy!r}")
-
-    elif callable(policy):
-        res = policy(frame, spec)
-        if not isinstance(res, pl.DataFrame):
-            raise TypeError(
-                f"custom missing_policy must return a polars.DataFrame, got {type(res)}"
-            )
-
-        _validate_custom_policy_output(res, spec, indicators)
-        out_frame = res.with_columns(
-            pl.sum_horizontal(
-                [pl.col(contribution_column(index)) for index in range(len(indicators))]
-            ).alias(SCORE)
-        )
-    else:
-        raise TypeError(f"missing_policy must be string or callable, got {type(policy)}")
+    out_frame = apply_transform(frame, spec)
+    assert isinstance(out_frame, pl.DataFrame)
 
     rows_out = out_frame.height
     dropped = rows_in - rows_out

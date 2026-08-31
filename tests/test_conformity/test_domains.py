@@ -66,6 +66,36 @@ def test_domains_conformity():
         assert row["df"] == val["df"], f"Mismatch in {m} ({sub}) df"
 
 
+def test_domains_conformity_lazy():
+    """Verify lazy domain estimation against R survey reference."""
+    ref_file = REF_DIR / "domains.json"
+    with open(ref_file) as f:
+        ref = json.load(f)
+
+    tol = ref["tolerance"]
+    df_dom = generate_domains(ref["generator_seed"])
+    spec = Specification({"d": ["i0", "i1", "i2", "i3"]})
+    design = SurveyDesign(weights="w", strata="stratum", psu="psu")
+
+    # 1. Domains by region (lazy & streaming)
+    res_reg = estimate(
+        df_dom, spec, design, k=0.5, over="region", lazy=True, streaming=True
+    ).collect()
+    est_reg = res_reg.estimates()
+
+    for val in [v for v in ref["values"] if v["over"] == "region"]:
+        m = val["measure"]
+        sub = val["subgroup"]
+        row = est_reg.filter(
+            (pl.col("measure") == m)
+            & (pl.col("over") == "region")
+            & (pl.col("subgroup") == sub)
+        ).row(0, named=True)
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"])
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"])
+        assert row["df"] == val["df"]
+
+
 @pytest.mark.optional
 def test_domains_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""

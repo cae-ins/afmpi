@@ -229,10 +229,15 @@ ressources explicite passé via `resources=`. **Limites réelles observées avec
   Polars est global au process, pas par appel. Mesuré : dans le benchmark 10M ci-dessous, une
   opération Polars antérieure dans le même process (génération du jeu de données synthétique)
   avait déjà fixé le pool à 22 threads avant que `max_threads=8` ne s'applique — la contrainte
-  n'a **pas** été respectée dans ce scénario, conformément à la limite documentée.
+  n'a **pas** été respectée dans ce scénario, conformément à la limite documentée. **Garantie
+  réelle** : `ExecutionConfig(max_threads=N, isolated_process=True)` exécute l'estimation dans un
+  sous-processus Python neuf où `POLARS_MAX_THREADS` est positionné avant tout import de Polars —
+  coût mesuré ~2,8 s par appel (démarrage interpréteur + imports + sérialisation), à réserver aux
+  calculs assez longs pour l'amortir.
 - `memory_limit` et `spill_dir` : **no-op documenté** — Polars n'expose pas de plafond mémoire ni
   de répertoire de spill par requête dans cette version ; les définir émet un `UserWarning`
-  plutôt que de simuler un contrôle qui n'existe pas.
+  plutôt que de simuler un contrôle qui n'existe pas. `isolated_process=True` ne couvre que le
+  CPU, pas la RAM.
 - `batch_size` : effectif, contrôle réellement le nombre de réplicats par lot dans
   `replicate_totals` (chemin en mémoire).
 
@@ -249,6 +254,22 @@ Cible normative (`PLAN.md` §14.9) : moins de 300 s **et** moins de 8 Go de pic 
 lignes. Le temps est largement sous la cible. Le pic mémoire mesuré (8,014 Go) est **légèrement
 au-dessus** de la cible de 8 Go — rapporté tel quel ; le test `@pytest.mark.slow` correspondant
 n'asserte actuellement que sur le temps, pas sur la mémoire.
+
+**Passage à l'échelle 10M/30M/50M, à charge combinatoire égale** (mesuré le 2026-09-01, mêmes
+8 seuils `k` / 3 désagrégations / 10 dimensions aux trois échelles, machine identique ci-dessus) :
+
+| Lignes | Temps réel | Cible | Statut |
+|---|---|---|---|
+| 10 000 000 | 86,20 s | < 300 s | PASS |
+| 30 000 000 | 214,18 s | < 600 s | PASS |
+| 50 000 000 | 394,66 s | < 900 s | PASS |
+
+Progression légèrement sous-linéaire, cohérente avec l'amortissement du coût fixe par appel
+documenté plus haut. **Pic RAM non rapporté pour 30M/50M** : ces deux mesures utilisaient
+`ExecutionConfig(isolated_process=True)`, qui exécute le calcul dans un sous-processus — le test
+mesure la RAM du process parent, pas de l'enfant où le calcul a réellement lieu, ce qui donne des
+deltas sans signification physique (négatifs dans les deux cas mesurés). Non corrigé dans cette
+version ; voir `CHANGELOG.md`.
 
 **Écart honnête** : à 100 000 lignes, `afmpi` (15,87 s) est **plus lent** que la version pandas
 naïve non optimisée (5,57 s). Ce n'est pas un simple effet d'échelle — c'est un **coût
@@ -285,32 +306,28 @@ phase 9 constitue donc un progrès net, même si le coût fixe par appel reste u
 pour un usage à échelle intermédiaire.
 
 **Validation et conformité statistique contre `survey` (R 4.5.3)** (`tests/test_conformity/`, `tests/oracle/`) :
-Une suite exhaustive de 358 tests vérifie la co-ïncidence numérique contre les oracles R `survey` :
+Une suite exhaustive de 369 tests vérifie la co-ïncidence numérique contre les oracles R `survey`,
+**sur le chemin en mémoire ET sur le chemin lazy/streaming** :
 - Sondage aléatoire simple (SRS) et stratifié simple ;
 - Plans de sondage en grappes et multi-degrés avec correction de population finie (FPC) ;
 - Plans PPS avec remise et sans remise (Sen-Yates-Grundy, Hájek) ;
-- Les six méthodes de réplication (`JK1`, `JKn`, `BRR`, `Fay_BRR`, `bootstrap`, `SDR`) ;
+- Les six méthodes de réplication (`JK1`, `JKn`, `BRR`, `Fay_BRR`, `bootstrap`, `SDR`), y compris
+  via un chemin lazy dédié (pas une linéarisation de Taylor appliquée à tort) ;
 - Politiques de gestion des grappes isolées (*lonely PSUs*) ;
-- Limites de données (poids extrêmes, politiques de valeurs manquantes) ;
-- Sous-populations et domaines sans rupture de plan.
+- Limites de données (poids extrêmes, les quatre politiques de valeurs manquantes — y compris
+  `reweighting`/`treat_as_nondeprived`/personnalisée sur le chemin lazy) ;
+- Sous-populations et domaines sans rupture de plan (pondération à zéro, pas de filtrage physique
+  des lignes hors domaine — y compris sur le chemin lazy).
 
-**Important : cette suite de conformité valide le moteur en mémoire (`memory`), pas
-automatiquement le chemin `lazy`/`streaming`.** Une relecture indépendante a montré que le chemin
-lazy/streaming (phase 9) ne reproduit pas encore toutes les capacités du moteur en mémoire — les
-combinaisons suivantes ne sont **pas supportées** sur ce chemin et lèvent explicitement
-`NotImplementedError` plutôt que de renvoyer un résultat silencieusement faux :
-
-| Combinaison sur `lazy=True` / `streaming=True` / `from_parquet(...)` | Pourquoi |
-|---|---|
-| `Specification(missing_policy=...)` autre que `"listwise_deletion"` | Le chemin lazy filtre toujours les valeurs manquantes en listwise ; `"reweighting"`/`"treat_as_nondeprived"`/personnalisée y sont ignorées silencieusement dans les versions antérieures à ce correctif. |
-| `domain=...` avec `SurveyDesign`/`ReplicateDesign` | Le chemin lazy filtrait physiquement les lignes hors domaine au lieu de les pondérer à zéro, ce qui fausse `df`/`se` (structure de grappes/strates amputée). Fonctionne pour `CensusDesign` (`se=0` de toute façon). |
-| `Stage(fpc=...)` | La correction de population finie était remplacée silencieusement par `f=0` sur le chemin lazy. |
-| `SurveyDesign(pps=...)` | Les probabilités d'inclusion PPS ne sont pas transportées sur le chemin lazy. |
-| `ReplicateDesign` | Aucun chemin lazy dédié : retomberait sur la linéarisation de Taylor au lieu de la variance par réplicats. |
-
-Ces cas fonctionnent correctement sur le chemin en mémoire (`estimate()` sans `lazy=True`/
-`streaming=True`, sans `from_parquet(...)`). Voir `CHANGELOG.md` pour le détail de cette
-correction et la feuille de route de mise à parité complète.
+**Historique de cette parité** : une relecture indépendante, faite juste après la publication du
+tag `v1.0.0`, avait trouvé que le chemin lazy/streaming ne reproduisait pas ces capacités
+(`missing_policy` toujours listwise, domaine filtré physiquement au lieu d'être pondéré à zéro,
+FPC/PPS ignorés, `ReplicateDesign` retombant sur la mauvaise méthode de variance). Un correctif
+d'urgence (`v1.0.1`) avait d'abord transformé ces angles morts en échecs explicites
+(`NotImplementedError`) plutôt que de laisser calculer un résultat faux. Cette version implémente
+la parité réelle pour les cinq cas — vérifiée directement contre le code, pas seulement contre le
+rapport de l'agent qui l'a produite (voir `CHANGELOG.md` pour le détail, y compris un chiffre de
+benchmark initialement rapporté à tort qui a été corrigé après re-mesure indépendante).
 
 ## Attribution et licence
 

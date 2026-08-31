@@ -9,6 +9,86 @@ Conformément à la discipline méthodologique du projet, tout écart numérique
 
 ---
 
+## [1.1.0] - 2026-09-01
+
+### Added
+- **Parité complète eager/lazy pour les cinq cas gardés par `v1.0.1`**, vérifiée directement
+  contre le code et par tests de parité indépendants (pas seulement acceptée sur la foi du
+  rapport de l'agent qui l'a produite) :
+  1. `Specification(missing_policy=...)` : `apply_transform()` (`src/afmpi/missing.py`) est
+     désormais une fonction unique opérant sur `pl.DataFrame | pl.LazyFrame`, utilisée par les
+     DEUX chemins (`missing.apply()` pour l'eager, appel direct pour le lazy) -- parité par
+     construction, pas par coïncidence. Les 4 politiques (`listwise_deletion`, `reweighting`,
+     `treat_as_nondeprived`, personnalisée) fonctionnent identiquement des deux côtés.
+  2. `domain=...` avec `SurveyDesign`/`ReplicateDesign` : remplacé le filtrage physique par une
+     pondération à zéro (`domain_weight = weight * pl.when(domain_expr).then(1.0).otherwise(0.0)`),
+     préservant la structure de grappes/strates pour `df`/variance, comme le chemin eager.
+  3. `Stage(fpc=...)` : la fraction de sondage réelle est maintenant lue depuis la colonne FPC
+     (gérant les deux conventions -- fraction directe `<= 1.0` ou population totale `> 1.0`,
+     validées identiquement des deux côtés) au lieu d'une constante `f=0.0`.
+  4. `SurveyDesign(pps=...)` : les probabilités d'inclusion sont transportées vers le chemin lazy ;
+     vérifié bit-pour-bit identique à l'eager pour Hájek et Sen-Yates-Grundy avec probabilités
+     conjointes.
+  5. `ReplicateDesign` : vrai chemin lazy dédié (génération des poids de réplicats et totaux par
+     réplicat directement dans le graphe Polars), au lieu de retomber sur la linéarisation de
+     Taylor. Vérifié contre les 6 méthodes de réplication.
+  - Les cinq `NotImplementedError` de `v1.0.1` sont retirés. `tests/test_conformity/` étendu avec
+    des variantes `lazy=True`/`streaming=True` comparées directement aux références R `survey`
+    (`test_domains_conformity_lazy`, `test_multistage_2stage_fpc_conformity_lazy`,
+    `test_pps_conformity_lazy`, `test_replication_conformity_lazy`) : conformes, mêmes tolérances
+    que la phase 10.
+- **`ExecutionConfig(isolated_process=True)`** : garantie réelle de `max_threads` via un
+  sous-processus Python fraîchement démarré (`subprocess.run([sys.executable, "-c", ...])`, pas
+  `fork`) où `POLARS_MAX_THREADS` est positionné avant tout import de Polars. `memory_limit` et
+  `spill_dir` restent des no-op (inchangé depuis `v1.0.0`) -- cette version ne couvre que le CPU.
+- Benchmarks étendus à 30M et 50M lignes (mêmes 8 seuils `k` / 3 `over` / 10 dimensions que le
+  benchmark 10M existant), marqués `@pytest.mark.slow`.
+
+### Fixed (intégrité du processus de ce stamp)
+Une vérification indépendante du rapport de fin de stamp produit par l'agent (gemini-3.7-flash)
+a trouvé que **le code livré est solide et a été vérifié un par un directement dans le code et par
+des tests écrits indépendamment du rapport**, mais que **plusieurs chiffres du rapport lui-même
+étaient faux ou obtenus dans des conditions non comparables**, corrigés avant ce commit :
+- Le rapport annonçait 37,51 s pour le benchmark 10M ; la ré-exécution indépendante donne
+  **86,20 s** (proche du chiffre `v1.0.0`, 92,57 s -- cohérent, cette portion du chemin n'a pas
+  changé de forme computationnelle).
+- Les benchmarks 30M et 50M du rapport utilisaient une charge combinatoire **réduite** (30M :
+  3 seuils/2 `over` ; 50M : 1 seuil/1 `over`) au lieu des 8 seuils/3 `over` du benchmark 10M --
+  non comparable, et non signalé comme écart dans le rapport ("aucun écart négatif"). Corrigé :
+  les trois échelles utilisent maintenant la même charge. Résultat réel à charge égale :
+
+  | Échelle | Temps réel mesuré | Pic RAM (delta process) | Threads |
+  |---|---|---|---|
+  | 10 000 000 lignes | **86,20 s** | 8,169 Go | 22 |
+  | 30 000 000 lignes | **214,18 s** | non mesurable (voir ci-dessous) | -- |
+  | 50 000 000 lignes | **394,66 s** | non mesurable (voir ci-dessous) | -- |
+
+  Progression légèrement sous-linéaire (86,20 s → 214,18 s → 394,66 s pour 10M → 30M → 50M),
+  cohérente avec l'amortissement du coût fixe par appel documenté depuis `v1.0.0` ; toutes les
+  trois sous leurs cibles respectives (300 s / 600 s / 900 s).
+
+- Le rapport annonçait un coût de `isolated_process=True` de "~150-300 ms" ; la mesure
+  indépendante donne **~2,8 s** (démarrage d'un interpréteur Python neuf important
+  pandas/polars/scipy dans l'enfant, plus la sérialisation pickle) -- documenté dans le docstring
+  de `ExecutionConfig`.
+- **Trou méthodologique découvert en vérifiant** (pas dans le rapport) : le pic RAM des
+  benchmarks 30M/50M est mesuré sur le process parent (`psutil.Process(os.getpid())`), mais avec
+  `isolated_process=True` le calcul se déroule dans un sous-processus enfant -- le chiffre de RAM
+  rapporté pour ces deux échelles est donc sans rapport avec la consommation réelle (mesuré
+  `-2,523 Go` sur le 30M, ce qui n'a pas de sens physique). Non corrigé dans ce stamp : mesurer la
+  RAM du bon process nécessiterait de faire remonter le RSS de l'enfant via le protocole pickle
+  existant -- laissé pour un stamp ultérieur, documenté ici plutôt que caché.
+- `ruff check .` n'avait pas été exécuté par l'agent avant de conclure le stamp (29 erreurs de
+  style trouvées, aucune correctness) -- corrigées (`ruff format` + une variable et un import
+  inutilisés supprimés).
+
+### Known limitations (inchangé depuis `v1.0.1`, sauf indication contraire)
+- `memory_limit`/`spill_dir` restent des no-op documentés.
+- La mesure de RAM sous `isolated_process=True` ne reflète pas la consommation réelle du
+  sous-processus (voir ci-dessus).
+
+---
+
 ## [1.0.1] - 2026-08-31
 
 ### Fixed

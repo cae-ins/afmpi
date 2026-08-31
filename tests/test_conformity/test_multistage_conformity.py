@@ -71,6 +71,34 @@ def test_multistage_2stage_fpc_conformity():
         assert row["df"] == val["df"], f"Mismatch in {suffix}_census1 df"
 
 
+def test_multistage_2stage_fpc_conformity_lazy():
+    """Verify lazy 2-stage sampling with FPC against R survey reference."""
+    ref_file = REF_DIR / "multistage.json"
+    with open(ref_file) as f:
+        ref = json.load(f)
+
+    tol = ref["tolerance"]
+    df_fpc, _ = generate_multistage(ref["generator_seed"])
+    spec = Specification({"d": ["i0", "i1", "i2", "i3"]})
+
+    des_fpc = SurveyDesign(
+        weights="w",
+        stages=[
+            Stage(id="psu", strata="stratum", fpc="f1"),
+            Stage(id="ssu", fpc="f2"),
+        ],
+    )
+    res_fpc = estimate(df_fpc, spec, des_fpc, k=0.5, lazy=True, streaming=True).collect()
+    est_fpc = res_fpc.estimates()
+
+    for suffix in ["H", "M0", "A"]:
+        val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_fpc")
+        row = est_fpc.filter(pl.col("measure") == suffix).row(0, named=True)
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"])
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"])
+        assert row["df"] == val["df"]
+
+
 @pytest.mark.optional
 def test_multistage_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""

@@ -37,4 +37,4 @@ __all__ = [
     "to_parquet",
     "to_stata",
 ]
-__version__ = "1.0.1"
+__version__ = "1.1.0"

@@ -18,7 +18,7 @@ import pandas as pd
 import polars as pl
 from scipy import stats
 
-from . import backend, change_over_time, deprivation, linearization
+from . import backend, change_over_time, deprivation, linearization, missing
 from . import domain as domain_module
 from . import estimands as estimands_module
 from .census_design import CensusDesign
@@ -193,6 +193,48 @@ def estimate(
     )
 
 
+def _run_in_subprocess(kwargs: dict) -> EstimationResult:
+    import pickle
+    import subprocess
+    import sys
+
+    resources = kwargs.get("resources")
+    if resources is not None:
+        kwargs["resources"] = ExecutionConfig(
+            max_threads=resources.max_threads,
+            isolated_process=False,
+            memory_limit=resources.memory_limit,
+            spill_dir=resources.spill_dir,
+            batch_size=resources.batch_size,
+        )
+
+    code = (
+        "import os, pickle, sys\n"
+        f"sys.path = {sys.path!r}\n"
+        "payload = pickle.loads(sys.stdin.buffer.read())\n"
+        "mt = payload.pop('max_threads', None)\n"
+        "if mt is not None:\n"
+        "    os.environ['POLARS_MAX_THREADS'] = str(mt)\n"
+        "from afmpi.estimation import _execute_estimation\n"
+        "try:\n"
+        "    res = _execute_estimation(**payload)\n"
+        "    sys.stdout.buffer.write(pickle.dumps((True, res)))\n"
+        "except Exception as e:\n"
+        "    sys.stdout.buffer.write(pickle.dumps((False, e)))\n"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        input=pickle.dumps(kwargs),
+        capture_output=True,
+        check=True,
+    )
+    success, val = pickle.loads(proc.stdout)
+    if not success:
+        raise val
+    return val
+
+
 def _execute_estimation(
     df: object,
     spec: Specification,
@@ -214,6 +256,29 @@ def _execute_estimation(
 ) -> EstimationResult:
     if design is None:
         design = SurveyDesign()
+
+    if resources is not None and resources.isolated_process:
+        kwargs = {
+            "df": df,
+            "spec": spec,
+            "design": design,
+            "k": k,
+            "over": over,
+            "tvar": tvar,
+            "cot_year": cot_year,
+            "domain": domain,
+            "ci_method": ci_method,
+            "level": level,
+            "check_decomposability": check_decomposability,
+            "overlap": overlap,
+            "panel_id": panel_id,
+            "resources": resources,
+            "streaming": streaming,
+            "projected_columns": projected_columns,
+            "is_lazy_collect": is_lazy_collect,
+            "max_threads": resources.max_threads,
+        }
+        return _run_in_subprocess(kwargs)
 
     if resources is not None and resources.max_threads is not None:
         requested = str(resources.max_threads)
@@ -325,65 +390,6 @@ def _estimate_lazy(
 ) -> EstimationResult:
     lf = frame_obj.lazy() if isinstance(frame_obj, pl.DataFrame) else frame_obj
 
-    # Known limitations of the lazy/streaming path (PLAN.md §14.9): the shared single-plan
-    # design does not yet replicate everything the in-memory path supports. Rather than
-    # silently returning a wrong estimate (listwise deletion instead of the requested missing
-    # policy, physically dropped rows instead of a zero-weighted domain, ignored FPC/PPS
-    # correction, or a Taylor-style variance mistakenly applied to replicate weights), each gap
-    # raises explicitly here. Remove a check only once the corresponding code path is actually
-    # implemented and covered by the conformity suite (tests/test_conformity/).
-    if isinstance(design, ReplicateDesign):
-        raise NotImplementedError(
-            "ReplicateDesign has no dedicated lazy/streaming execution path yet -- the shared "
-            "plan machinery would silently apply Taylor linearization instead of replicate-"
-            "weight variance. Re-run estimate() without lazy=True/streaming=True and without "
-            "from_parquet(...) streaming for ReplicateDesign."
-        )
-
-    if spec.missing_policy != "listwise_deletion":
-        raise NotImplementedError(
-            f"The lazy/streaming path only supports missing_policy='listwise_deletion' today; "
-            f"spec.missing_policy={spec.missing_policy!r} requires the in-memory path -- "
-            "re-run estimate() without lazy=True/streaming=True and without from_parquet(...) "
-            "streaming."
-        )
-
-    if isinstance(design, SurveyDesign):
-        if design.pps is not None:
-            raise NotImplementedError(
-                "PPS designs (design.pps=...) are not yet supported on the lazy/streaming "
-                "path -- inclusion probabilities would be silently dropped. Re-run estimate() "
-                "without lazy=True/streaming=True and without from_parquet(...) streaming."
-            )
-        fpc_stages = [st for st in design.resolved_stages if st.fpc is not None]
-        if fpc_stages:
-            raise NotImplementedError(
-                "Stage(fpc=...) is not yet supported on the lazy/streaming path -- the finite "
-                "population correction would be silently replaced by f=0. Re-run estimate() "
-                "without lazy=True/streaming=True and without from_parquet(...) streaming."
-            )
-
-    if domain is not None and not isinstance(design, CensusDesign):
-        raise NotImplementedError(
-            "domain=... on the lazy/streaming path is only supported for CensusDesign today -- "
-            "SurveyDesign/ReplicateDesign domain estimation requires zero-weighting out-of-"
-            "domain rows to preserve the design's cluster/stratum structure for variance, not "
-            "physically dropping them. Re-run estimate() without lazy=True/streaming=True and "
-            "without from_parquet(...) streaming, or use result.domain(...) after an in-memory "
-            "estimate()."
-        )
-
-    if domain is not None:
-        if isinstance(domain, str):
-            # Same reading as the eager path (domain_module.from_expression):
-            # a string domain is always a SQL-flavoured boolean expression. Safe here: only
-            # CensusDesign reaches this point (guarded above), where filtering and
-            # zero-weighting are equivalent since se=0 regardless.
-            lf = lf.filter(pl.sql_expr(domain))
-        elif isinstance(domain, pl.Expr):
-            lf = lf.filter(domain)
-
-    indicators = spec.indicators
     w_col = design.weights
     h_col = design.household_size
     if w_col is not None and h_col is not None:
@@ -397,27 +403,23 @@ def _estimate_lazy(
 
     lf = lf.with_columns(weight_expr.alias(deprivation.WEIGHT))
 
-    missing_cond = pl.all_horizontal([pl.col(col).is_not_null() for col in indicators])
-    lf_valid = lf.filter(missing_cond)
-
-    extra_exprs = []
-    for index, indicator in enumerate(indicators):
-        w = spec.indicator_weights[indicator]
-        g_col = deprivation.deprived_column(index)
-        obs_col = deprivation.observed_column(index)
-        contrib_col = deprivation.contribution_column(index)
-        extra_exprs.extend(
-            [
-                pl.col(indicator).cast(pl.Float64).alias(g_col),
-                pl.lit(1.0, dtype=pl.Float64).alias(obs_col),
-                (pl.col(indicator).cast(pl.Float64) * w).alias(contrib_col),
-            ]
-        )
-    score_expr = pl.sum_horizontal(
-        [pl.col(ind).cast(pl.Float64) * w for ind, w in spec.indicator_weights.items()]
-    )
-    lf_scored = lf_valid.with_columns(score_expr.alias(deprivation.SCORE), *extra_exprs)
+    lf_scored = missing.apply_transform(lf, spec)
     lf_scored = _add_design_identifiers_lazy(lf_scored, design)
+
+    if domain is not None:
+        if isinstance(domain, str):
+            domain_expr = pl.sql_expr(domain)
+        elif isinstance(domain, pl.Expr):
+            domain_expr = domain
+        else:
+            raise TypeError("domain must be a string expression or a polars expression")
+        domain_cond = domain_expr
+        domain_weight = pl.col(deprivation.WEIGHT) * pl.when(domain_cond).then(1.0).otherwise(
+            0.0
+        )
+    else:
+        domain_cond = None
+        domain_weight = pl.col(deprivation.WEIGHT)
 
     all_k_estimands: list[estimands_module.RatioEstimand] = []
     k_estimand_map: dict[float, tuple[estimands_module.RatioEstimand, ...]] = {}
@@ -440,36 +442,110 @@ def _estimate_lazy(
 
     if design.variance_path == "census":
         plan_nat = lf_scored.select(
-            *linearization._totals_exprs(all_k_estimands, deprivation.WEIGHT),
-            pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
-            (pl.col(deprivation.WEIGHT) > 0).sum().alias("__afmpi_cluster_rows"),
+            *linearization._totals_exprs(all_k_estimands, domain_weight),
+            domain_weight.sum().alias("__afmpi_cluster_weight"),
+            (domain_weight > 0).sum().alias("__afmpi_cluster_rows"),
         )
-    else:
-        group_cols = _stage_group_columns_lazy(lf_scored, design)
+        over_plans = [
+            lf_scored.group_by(var).agg(
+                *linearization._totals_exprs(all_k_estimands, domain_weight),
+                domain_weight.sum().alias("__afmpi_cluster_weight"),
+                (domain_weight > 0).sum().alias("__afmpi_cluster_rows"),
+            )
+            for var in variables
+        ]
+    elif design.variance_path == "taylor":
+        survey_design: SurveyDesign = design  # type: ignore[assignment]
+        group_cols = _stage_group_columns_lazy(lf_scored, survey_design)
         plan_nat = linearization.cluster_sums_lazy(
-            lf_scored, all_k_estimands, weight=deprivation.WEIGHT, group_columns=group_cols
+            lf_scored, all_k_estimands, weight=domain_weight, group_columns=group_cols
         )
-
-    over_plans: list[pl.LazyFrame] = []
-    for var in variables:
-        if design.variance_path == "census":
-            over_plans.append(
-                lf_scored.group_by(var).agg(
-                    *linearization._totals_exprs(all_k_estimands, deprivation.WEIGHT),
-                    pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
-                    (pl.col(deprivation.WEIGHT) > 0).sum().alias("__afmpi_cluster_rows"),
+        over_plans = [
+            linearization.cluster_sums_lazy(
+                lf_scored,
+                all_k_estimands,
+                weight=domain_weight,
+                group_columns=tuple(group_cols) + (var,),
+            )
+            for var in variables
+        ]
+    elif design.variance_path == "replication":
+        rep_design: ReplicateDesign = design  # type: ignore[assignment]
+        if rep_design.replicate_weights is None:
+            lf_scored, repw_cols, scale, rscales = generate_replicate_weights(
+                lf_scored, rep_design
+            )
+            if rep_design.method == "JKn" and rep_design.strata is not None:
+                H = (
+                    lf_scored.select(pl.col(rep_design.strata).cast(pl.String))
+                    .collect()
+                    .n_unique()
                 )
+            else:
+                H = 1
+            rep_design_active = ReplicateDesign(
+                weights=rep_design.weights,
+                household_size=rep_design.household_size,
+                replicate_weights=repw_cols,
+                method=rep_design.method,
+                strata=rep_design.strata,
+                psu=rep_design.psu,
+                fay=rep_design.fay,
+                scale=scale,
+                rscales=rscales,
+                combined_weights=rep_design.combined_weights,
+                mse=rep_design.mse,
+                degf=rep_design.degf,
             )
         else:
-            group_cols = _stage_group_columns_lazy(lf_scored, design)
-            over_plans.append(
-                linearization.cluster_sums_lazy(
-                    lf_scored,
-                    all_k_estimands,
-                    weight=deprivation.WEIGHT,
-                    group_columns=tuple(group_cols) + (var,),
-                )
+            scale = rep_design.scale if rep_design.scale is not None else 1.0
+            rscales = (
+                rep_design.rscales
+                if rep_design.rscales is not None
+                else ((1.0,) * len(rep_design.replicate_weights))
             )
+            if rep_design.method == "JKn" and rep_design.strata is not None:
+                H = (
+                    lf_scored.select(pl.col(rep_design.strata).cast(pl.String))
+                    .collect()
+                    .n_unique()
+                )
+            else:
+                H = 1
+            rep_design_active = rep_design
+
+        rep_weight_exprs = replicate_weight_expressions(rep_design_active, lf_scored)
+        R = len(rep_weight_exprs)
+        df_strata = (
+            H
+            if (
+                rep_design.method == "JKn"
+                and (rep_design.strata is not None or rep_design.replicate_weights is None)
+            )
+            else 1
+        )
+        degrees = DesignDegrees(
+            psus=R,
+            strata=df_strata,
+            lonely_strata=0,
+            override_df=rep_design.degf,
+        )
+
+        select_exprs = [
+            *linearization._totals_exprs(all_k_estimands, domain_weight),
+            domain_weight.sum().alias("__afmpi_cluster_weight"),
+            (domain_weight > 0).sum().alias("__afmpi_cluster_rows"),
+        ]
+        for r, w_r in enumerate(rep_weight_exprs):
+            w_r_active = w_r * domain_cond.cast(pl.Float64) if domain_cond is not None else w_r
+            for item in all_k_estimands:
+                select_exprs.append((w_r_active * item.y).sum().alias(f"y_rep_{r}_{item.key}"))
+                select_exprs.append((w_r_active * item.x).sum().alias(f"x_rep_{r}_{item.key}"))
+
+        plan_nat = lf_scored.select(select_exprs)
+        over_plans = [lf_scored.group_by(var).agg(select_exprs) for var in variables]
+    else:
+        raise ValueError(f"unknown variance path: {design.variance_path!r}")
 
     all_plans = [plan_nat, *over_plans]
     engine = "streaming" if streaming else "auto"
@@ -492,13 +568,22 @@ def _estimate_lazy(
             }
         )
 
+    if domain is not None:
+        pop_active = float(nat_res.row(0, named=True).get("__afmpi_cluster_rows") or 0)
+        diag_rows.append(
+            {
+                "topic": "domain",
+                "context": str(domain),
+                "decision": "subpopulation_filter",
+                "detail": f"active rows: {int(pop_active)}",
+            }
+        )
+
     nat_rows: list[dict[str, object]] = []
 
     for cutoff in cutoffs:
         raw_estimands = k_estimand_map[cutoff]
         prefix = f"k_{cutoff}__"
-
-        nat_sub = _extract_cutoff_sums(nat_res, raw_estimands, prefix)
 
         if design.variance_path == "census":
             nat_dict = nat_res.row(0, named=True)
@@ -593,10 +678,18 @@ def _estimate_lazy(
                             "error": abs(weighted_m0 - national_m0),
                         }
                     )
-        else:
+        elif design.variance_path == "taylor":
+            survey_design_taylor: SurveyDesign = design  # type: ignore[assignment]
+            group_cols = _stage_group_columns_lazy(lf_scored, survey_design_taylor)
+            universe = nat_res.select(list(group_cols)).unique(maintain_order=True)
+
+            nat_sub = _extract_cutoff_sums(nat_res, raw_estimands, prefix)
             ratios, report = _taylor_report(
-                nat_sub, raw_estimands, tuple(item.key for item in raw_estimands), design
-            )  # type: ignore[arg-type]
+                nat_sub,
+                raw_estimands,
+                tuple(item.key for item in raw_estimands),
+                survey_design_taylor,
+            )
             _check_report_diags(
                 report, None, None, cutoff, ratios, design, ci_method, diag_rows
             )
@@ -617,14 +710,14 @@ def _estimate_lazy(
                 share_total = 0.0
                 weighted_m0 = 0.0
                 for subgroup in subgroups_list:
-                    sub_sums = over_df.filter(pl.col(variable).cast(pl.String) == subgroup)
+                    sub_sums = _align(over_df, universe, variable, subgroup, group_cols)
                     sub_sub = _extract_cutoff_sums(sub_sums, raw_estimands, prefix)
                     sub_ratios, sub_report = _taylor_report(
                         sub_sub,
                         raw_estimands,
                         tuple(item.key for item in raw_estimands),
-                        design,
-                    )  # type: ignore[arg-type]
+                        survey_design_taylor,
+                    )
                     _check_report_diags(
                         sub_report,
                         variable,
@@ -642,6 +735,154 @@ def _estimate_lazy(
 
                     if national_population:
                         share = sub_report.population / national_population
+                        share_total += share
+                        subgroup_m0 = _pick(sub_rows, "M0")
+                        if subgroup_m0 is not None:
+                            weighted_m0 += share * subgroup_m0
+
+                if national_m0 is not None:
+                    decomposition.append(
+                        {
+                            "k": cutoff,
+                            "over": variable,
+                            "shares": share_total,
+                            "M0": national_m0,
+                            "decomposed_M0": weighted_m0,
+                            "error": abs(weighted_m0 - national_m0),
+                        }
+                    )
+        elif design.variance_path == "replication":
+            keys = tuple(item.key for item in raw_estimands)
+            nat_dict = nat_res.row(0, named=True)
+            pop = float(nat_dict.get("__afmpi_cluster_weight") or 0.0)
+            obs = int(nat_dict.get("__afmpi_cluster_rows") or 0)
+            nat_point = tuple(
+                linearization.RatioTotals(
+                    estimand=item,
+                    numerator=float(
+                        nat_dict.get(linearization._NUMERATOR_PREFIX + prefix + item.key) or 0.0
+                    ),
+                    denominator=float(
+                        nat_dict.get(linearization._DENOMINATOR_PREFIX + prefix + item.key)
+                        or 0.0
+                    ),
+                )
+                for item in raw_estimands
+            )
+            nat_reps = [
+                tuple(
+                    linearization.RatioTotals(
+                        estimand=item,
+                        numerator=float(nat_dict.get(f"y_rep_{r}_{prefix}{item.key}") or 0.0),
+                        denominator=float(nat_dict.get(f"x_rep_{r}_{prefix}{item.key}") or 0.0),
+                    )
+                    for item in raw_estimands
+                )
+                for r in range(R)
+            ]
+            nat_vars = replicate_variance(
+                nat_point,
+                nat_reps,
+                keys,
+                scale=scale,
+                rscales=rscales,
+                mse=rep_design_active.mse,
+            )
+            nat_report = VarianceReport(
+                values=nat_vars,
+                degrees=degrees,
+                population=pop,
+                observations=obs,
+            )
+            _check_report_diags(
+                nat_report, None, None, cutoff, nat_point, design, ci_method, diag_rows
+            )
+            nat_rows = _context_rows(
+                nat_point, nat_report, cutoff, None, None, ci_method, level
+            )
+            rows.extend(nat_rows)
+            national_population = pop
+            national_m0 = _pick(nat_rows, "M0")
+
+            for idx, variable in enumerate(variables):
+                over_df = over_res[idx]
+                over_dicts = over_df.to_dicts()
+                over_dicts.sort(
+                    key=lambda r: str(r[variable]) if r[variable] is not None else ""
+                )
+                share_total = 0.0
+                weighted_m0 = 0.0
+                for row_dict in over_dicts:
+                    val = row_dict[variable]
+                    if val is None:
+                        continue
+                    subgroup = str(val)
+                    sub_pop = float(row_dict.get("__afmpi_cluster_weight") or 0.0)
+                    sub_obs = int(row_dict.get("__afmpi_cluster_rows") or 0)
+                    sub_point = tuple(
+                        linearization.RatioTotals(
+                            estimand=item,
+                            numerator=float(
+                                row_dict.get(
+                                    linearization._NUMERATOR_PREFIX + prefix + item.key
+                                )
+                                or 0.0
+                            ),
+                            denominator=float(
+                                row_dict.get(
+                                    linearization._DENOMINATOR_PREFIX + prefix + item.key
+                                )
+                                or 0.0
+                            ),
+                        )
+                        for item in raw_estimands
+                    )
+                    sub_reps = [
+                        tuple(
+                            linearization.RatioTotals(
+                                estimand=item,
+                                numerator=float(
+                                    row_dict.get(f"y_rep_{r}_{prefix}{item.key}") or 0.0
+                                ),
+                                denominator=float(
+                                    row_dict.get(f"x_rep_{r}_{prefix}{item.key}") or 0.0
+                                ),
+                            )
+                            for item in raw_estimands
+                        )
+                        for r in range(R)
+                    ]
+                    sub_vars = replicate_variance(
+                        sub_point,
+                        sub_reps,
+                        keys,
+                        scale=scale,
+                        rscales=rscales,
+                        mse=rep_design_active.mse,
+                    )
+                    sub_report = VarianceReport(
+                        values=sub_vars,
+                        degrees=degrees,
+                        population=sub_pop,
+                        observations=sub_obs,
+                    )
+                    _check_report_diags(
+                        sub_report,
+                        variable,
+                        subgroup,
+                        cutoff,
+                        sub_point,
+                        design,
+                        ci_method,
+                        diag_rows,
+                    )
+                    sub_rows = _context_rows(
+                        sub_point, sub_report, cutoff, variable, subgroup, ci_method, level
+                    )
+                    rows.extend(sub_rows)
+
+                    if national_population:
+                        share = sub_pop / national_population
                         share_total += share
                         subgroup_m0 = _pick(sub_rows, "M0")
                         if subgroup_m0 is not None:
@@ -692,7 +933,9 @@ def _estimate_lazy(
         _matrix=None,
         _cutoffs=cutoffs,
         _over=variables,
-        _domain=None,
+        _domain=(None, domain if isinstance(domain, str) else "domain")
+        if domain is not None
+        else None,
         _ci_method=ci_method,
         _level=level,
         _tvar=tvar,
@@ -727,22 +970,33 @@ def _extract_cutoff_sums(
 
 
 def _add_design_identifiers_lazy(lf: pl.LazyFrame, design: Design) -> pl.LazyFrame:
-    if isinstance(design, CensusDesign):
+    if isinstance(design, (CensusDesign, ReplicateDesign)):
         return lf
     if isinstance(design, SurveyDesign):
         stages = design.resolved_stages
         depth = max(1, len(stages))
-        exprs = []
         if depth == 1 and not stages:
             s_name = design.strata
             p_name = design.psu
-            s_expr = pl.col(s_name).cast(pl.String) if s_name else pl.lit("__afmpi_all__")
-            p_expr = (
-                pl.col(p_name).cast(pl.String)
-                if p_name
-                else pl.int_range(0, pl.len()).cast(pl.String)
+            s_expr = (
+                pl.col(s_name).cast(pl.String).fill_null("__afmpi_null__")
+                if s_name
+                else pl.lit("__afmpi_all__")
             )
-            exprs.extend(
+            p_expr = (
+                (
+                    s_expr
+                    + pl.lit("|")
+                    + pl.col(p_name).cast(pl.String).fill_null("__afmpi_null__")
+                )
+                if p_name
+                else (
+                    s_expr
+                    + pl.lit("|")
+                    + pl.int_range(0, pl.len(), dtype=pl.Int64).cast(pl.String)
+                )
+            )
+            lf = lf.with_columns(
                 [
                     s_expr.alias(deprivation.STRATUM),
                     p_expr.alias(deprivation.PSU),
@@ -754,20 +1008,54 @@ def _add_design_identifiers_lazy(lf: pl.LazyFrame, design: Design) -> pl.LazyFra
                 s_col = deprivation.stratum_column(idx)
                 p_col = deprivation.psu_column(idx)
                 f_col = deprivation.fraction_column(idx)
-                s_expr = (
-                    pl.col(stage.strata).cast(pl.String)
-                    if stage.strata
-                    else pl.lit(f"__afmpi_all{idx}__")
+                if idx == 1:
+                    stratum_expr = (
+                        pl.col(stage.strata).cast(pl.String).fill_null("__afmpi_null__")
+                        if stage.strata
+                        else pl.lit("__afmpi_all__")
+                    )
+                else:
+                    prev_psu = pl.col(deprivation.psu_column(idx - 1))
+                    stratum_expr = (
+                        prev_psu
+                        + pl.lit("|")
+                        + (
+                            pl.col(stage.strata).cast(pl.String).fill_null("__afmpi_null__")
+                            if stage.strata
+                            else pl.lit("")
+                        )
+                    )
+
+                psu_expr = (
+                    stratum_expr
+                    + pl.lit("|")
+                    + pl.col(stage.id).cast(pl.String).fill_null("__afmpi_null__")
                 )
-                p_expr = pl.col(stage.id).cast(pl.String)
-                exprs.extend(
-                    [
-                        s_expr.alias(s_col),
-                        p_expr.alias(p_col),
-                        pl.lit(0.0).alias(f_col),
-                    ]
-                )
-        return lf.with_columns(exprs)
+                stage_exprs = [
+                    stratum_expr.alias(s_col),
+                    psu_expr.alias(p_col),
+                ]
+                if stage.fpc is not None:
+                    fpc_col = pl.col(stage.fpc).cast(pl.Float64)
+                    m_expr = psu_expr.n_unique().over(stratum_expr)
+                    f_expr = (
+                        pl.when(fpc_col <= 1.0)
+                        .then(fpc_col)
+                        .otherwise(m_expr.cast(pl.Float64) / fpc_col)
+                        .fill_null(0.0)
+                    )
+                    stage_exprs.append(f_expr.alias(f_col))
+                else:
+                    stage_exprs.append(pl.lit(0.0).alias(f_col))
+
+                lf = lf.with_columns(stage_exprs)
+
+        if design.pps is not None and design.pps.inclusion_probability is not None:
+            lf = lf.with_columns(
+                pl.col(design.pps.inclusion_probability).cast(pl.Float64).alias(deprivation.PI)
+            )
+
+        return lf
     return lf
 
 
@@ -782,6 +1070,8 @@ def _stage_group_columns_lazy(lf: pl.LazyFrame, design: Design) -> tuple[str, ..
             cols.append(deprivation.stratum_column(level))
             cols.append(deprivation.psu_column(level))
             cols.append(deprivation.fraction_column(level))
+        if design.pps is not None and design.pps.inclusion_probability is not None:
+            cols.append(deprivation.PI)
         return tuple(cols)
     return ()
 

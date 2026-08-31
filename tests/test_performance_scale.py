@@ -268,66 +268,273 @@ def test_full_10m_census_benchmark(tmp_path: Path):
     threads_observed = pl.thread_pool_size()
 
     print(
-        f"\n[BENCHMARK RESULT] Time: {t_elapsed:.2f}s | "
+        f"\n[BENCHMARK 10M RESULT] Time: {t_elapsed:.2f}s | "
         f"Peak RAM: {peak_ram_gb:.3f} GB | Threads: {threads_observed}"
     )
 
     assert t_elapsed < 300.0, f"Benchmark elapsed time {t_elapsed:.2f}s exceeded 300s target"
 
 
-# -----------------------------------------------------------------------------
-# Known gaps between the eager and lazy/streaming paths (PLAN.md §14.9): each must
-# fail loudly with NotImplementedError rather than silently return a wrong estimate.
-# -----------------------------------------------------------------------------
+@pytest.mark.slow
+def test_full_30m_census_benchmark(tmp_path: Path):
+    """Full 30,000,000 row census performance benchmark."""
+    import time
 
+    from benchmarks.generate_census import generate_census_parquet
 
-def test_lazy_rejects_non_listwise_missing_policy(sample_df: pl.DataFrame) -> None:
+    parquet_path = tmp_path / "census_30m.parquet"
+    print("\n[BENCHMARK] Generating 30M synthetic census dataset...")
+    generate_census_parquet(parquet_path, n_rows=30_000_000)
+
     spec = Specification(
-        dimensions={"d1": ["ind1", "ind2", "ind3"]}, missing_policy="reweighting"
+        dimensions={
+            f"d{i}": [f"ind{i * 3 + 1}", f"ind{i * 3 + 2}", f"ind{i * 3 + 3}"]
+            for i in range(10)
+        },
     )
-    design = SurveyDesign(weights="weight", psu="psu")
-    with pytest.raises(NotImplementedError, match="missing_policy"):
-        estimate(sample_df, spec, design, k=0.33, lazy=True).collect()
-
-
-def test_lazy_rejects_domain_on_survey_design(sample_df: pl.DataFrame) -> None:
-    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
-    design = SurveyDesign(weights="weight", psu="psu")
-    with pytest.raises(NotImplementedError, match="domain"):
-        estimate(
-            sample_df, spec, design, k=0.33, lazy=True, domain="region == 'North'"
-        ).collect()
-
-
-def test_lazy_allows_domain_on_census_design(sample_df: pl.DataFrame) -> None:
-    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
     design = CensusDesign(weights="weight")
-    res = estimate(sample_df, spec, design, k=0.33, lazy=True, domain="region == 'North'")
+    resources = ExecutionConfig(max_threads=8, isolated_process=True)
+
+    process = psutil.Process(os.getpid())
+    mem_before = process.memory_info().rss
+
+    t0 = time.perf_counter()
+    src = from_parquet(parquet_path)
+    res = src.estimate(
+        spec,
+        design,
+        k=[0.2, 0.25, 0.3, 0.33, 0.4, 0.5, 0.6, 0.7],
+        over=["region", "department", "subprefecture"],
+        resources=resources,
+    )
     if hasattr(res, "collect"):
         res = res.collect()
-    assert res.M0 is not None
+
+    t_elapsed = time.perf_counter() - t0
+    mem_after = process.memory_info().rss
+    peak_ram_gb = (mem_after - mem_before) / (1024**3)
+
+    print(f"\n[BENCHMARK 30M RESULT] Time: {t_elapsed:.2f}s | Peak RAM: {peak_ram_gb:.3f} GB")
+
+    assert t_elapsed < 600.0, f"Benchmark elapsed time {t_elapsed:.2f}s exceeded 600s target"
 
 
-def test_lazy_rejects_stage_fpc(sample_df: pl.DataFrame) -> None:
-    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
-    df = sample_df.with_columns(pl.lit(0.1).alias("fpc1"))
-    design = SurveyDesign(stages=[Stage(id="psu", fpc="fpc1")])
-    with pytest.raises(NotImplementedError, match="fpc"):
-        estimate(df, spec, design, k=0.33, lazy=True).collect()
+@pytest.mark.slow
+def test_full_50m_census_benchmark(tmp_path: Path):
+    """Full 50,000,000 row census performance benchmark."""
+    import time
 
+    from benchmarks.generate_census import generate_census_parquet
 
-def test_lazy_rejects_pps_design(sample_df: pl.DataFrame) -> None:
-    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
-    df = sample_df.with_columns((pl.col("psu").cast(pl.Float64) / 100).alias("pi"))
-    design = SurveyDesign(
-        psu="psu", pps=PPSDesign(method="without_replacement", inclusion_probability="pi")
+    parquet_path = tmp_path / "census_50m.parquet"
+    print("\n[BENCHMARK] Generating 50M synthetic census dataset...")
+    generate_census_parquet(parquet_path, n_rows=50_000_000)
+
+    spec = Specification(
+        dimensions={
+            f"d{i}": [f"ind{i * 3 + 1}", f"ind{i * 3 + 2}", f"ind{i * 3 + 3}"]
+            for i in range(10)
+        },
     )
-    with pytest.raises(NotImplementedError, match="PPS"):
-        estimate(df, spec, design, k=0.33, lazy=True).collect()
+    design = CensusDesign(weights="weight")
+    resources = ExecutionConfig(max_threads=8, isolated_process=True)
+
+    process = psutil.Process(os.getpid())
+    mem_before = process.memory_info().rss
+
+    t0 = time.perf_counter()
+    src = from_parquet(parquet_path)
+    res = src.estimate(
+        spec,
+        design,
+        k=[0.2, 0.25, 0.3, 0.33, 0.4, 0.5, 0.6, 0.7],
+        over=["region", "department", "subprefecture"],
+        resources=resources,
+    )
+    if hasattr(res, "collect"):
+        res = res.collect()
+
+    t_elapsed = time.perf_counter() - t0
+    mem_after = process.memory_info().rss
+    peak_ram_gb = (mem_after - mem_before) / (1024**3)
+
+    print(f"\n[BENCHMARK 50M RESULT] Time: {t_elapsed:.2f}s | Peak RAM: {peak_ram_gb:.3f} GB")
+
+    assert t_elapsed < 900.0, f"Benchmark elapsed time {t_elapsed:.2f}s exceeded 900s target"
 
 
-def test_lazy_rejects_replicate_design(sample_df: pl.DataFrame) -> None:
-    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
-    design = ReplicateDesign(weights="weight", psu="psu", method="bootstrap", replicates=10)
-    with pytest.raises(NotImplementedError, match="ReplicateDesign"):
-        estimate(sample_df, spec, design, k=0.33, lazy=True).collect()
+# -----------------------------------------------------------------------------
+# Parity tests between eager and lazy/streaming paths (PLAN.md §14.9, STAMP13)
+# -----------------------------------------------------------------------------
+
+
+def test_lazy_parity_all_missing_policies() -> None:
+    df_missing = pl.DataFrame(
+        {
+            "ind1": [1, 0, None, 0, 1, 0, 1, None, 0, 1] * 10,
+            "ind2": [0, 1, 1, 0, None, 1, 1, 0, 0, 1] * 10,
+            "ind3": [1, 1, 0, 0, 1, None, 1, 1, 1, 0] * 10,
+            "weight": [1.5] * 100,
+            "psu": ([1, 1, 2, 2, 3, 3, 4, 4, 5, 5] * 10),
+            "region": (["North", "South", "East", "West", "Central"] * 20),
+        }
+    )
+    design = SurveyDesign(weights="weight", psu="psu")
+
+    for policy in ("listwise_deletion", "reweighting", "treat_as_nondeprived"):
+        spec = Specification(
+            dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]},
+            missing_policy=policy,
+        )
+        res_eager = estimate(df_missing, spec, design, k=0.33, lazy=False)
+        res_lazy = estimate(df_missing, spec, design, k=0.33, lazy=True).collect()
+        assert_frame_equal(
+            res_eager.estimates(), res_lazy.estimates(), check_exact=False, atol=1e-10
+        )
+
+    # Custom callable policy (treat_as_deprived)
+    def custom_policy(df, spec):
+        weights = spec.indicator_weights
+        indicators = spec.indicators
+        g_cols = [
+            pl.col(item).cast(pl.Float64).fill_null(1.0).alias(f"__afmpi_g{idx}")
+            for idx, item in enumerate(indicators)
+        ]
+        obs_cols = [
+            pl.lit(1.0, dtype=pl.Float64).alias(f"__afmpi_obs{idx}")
+            for idx in range(len(indicators))
+        ]
+        wc_cols = [
+            (pl.col(f"__afmpi_g{idx}") * weights[item]).alias(f"__afmpi_wc{idx}")
+            for idx, item in enumerate(indicators)
+        ]
+        return df.with_columns(*g_cols, *obs_cols).with_columns(*wc_cols)
+
+    spec_custom = Specification(
+        dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]},
+        missing_policy=custom_policy,
+    )
+    res_eager = estimate(df_missing, spec_custom, design, k=0.33, lazy=False)
+    res_lazy = estimate(df_missing, spec_custom, design, k=0.33, lazy=True).collect()
+    assert_frame_equal(
+        res_eager.estimates(), res_lazy.estimates(), check_exact=False, atol=1e-10
+    )
+
+
+def test_lazy_parity_domain_survey_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]})
+    design = SurveyDesign(weights="weight", psu="psu")
+
+    res_eager = estimate(
+        sample_df, spec, design, k=0.33, domain="region == 'North'", lazy=False
+    )
+    res_lazy = estimate(
+        sample_df, spec, design, k=0.33, domain="region == 'North'", lazy=True
+    ).collect()
+
+    assert_frame_equal(
+        res_eager.estimates(), res_lazy.estimates(), check_exact=False, atol=1e-10
+    )
+
+
+def test_lazy_parity_stage_fpc(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]})
+    # Sampling fraction
+    df_fpc = sample_df.with_columns(pl.lit(0.2).alias("fpc1"))
+    design_fpc = SurveyDesign(
+        weights="weight", stages=[Stage(id="psu", strata="region", fpc="fpc1")]
+    )
+    res_eager = estimate(df_fpc, spec, design_fpc, k=0.33, lazy=False)
+    res_lazy = estimate(df_fpc, spec, design_fpc, k=0.33, lazy=True).collect()
+    assert_frame_equal(
+        res_eager.estimates(), res_lazy.estimates(), check_exact=False, atol=1e-10
+    )
+
+    # Population counts N_h
+    df_fpc_pop = sample_df.with_columns(pl.lit(100.0).alias("N_h"))
+    design_pop = SurveyDesign(
+        weights="weight", stages=[Stage(id="psu", strata="region", fpc="N_h")]
+    )
+    res_eager2 = estimate(df_fpc_pop, spec, design_pop, k=0.33, lazy=False)
+    res_lazy2 = estimate(df_fpc_pop, spec, design_pop, k=0.33, lazy=True).collect()
+    assert_frame_equal(
+        res_eager2.estimates(), res_lazy2.estimates(), check_exact=False, atol=1e-10
+    )
+
+
+def test_lazy_parity_pps_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]})
+    df_pps = sample_df.with_columns((pl.col("psu").cast(pl.Float64) / 10.0).alias("pi"))
+
+    for method, variance in [
+        ("with_replacement", "auto"),
+        ("without_replacement", "hajek"),
+    ]:
+        pps_conf = PPSDesign(method=method, variance=variance, inclusion_probability="pi")
+        design_pps = SurveyDesign(weights="weight", psu="psu", pps=pps_conf)
+        res_eager = estimate(df_pps, spec, design_pps, k=0.33, lazy=False)
+        res_lazy = estimate(df_pps, spec, design_pps, k=0.33, lazy=True).collect()
+        assert_frame_equal(
+            res_eager.estimates(), res_lazy.estimates(), check_exact=False, atol=1e-10
+        )
+        design_pps = SurveyDesign(weights="weight", psu="psu", pps=pps_conf)
+        res_eager = estimate(df_pps, spec, design_pps, k=0.33, lazy=False)
+        res_lazy = estimate(df_pps, spec, design_pps, k=0.33, lazy=True).collect()
+        assert_frame_equal(
+            res_eager.estimates(), res_lazy.estimates(), check_exact=False, atol=1e-10
+        )
+
+
+def test_lazy_parity_replicate_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]})
+
+    # Bootstrap
+    design_boot = ReplicateDesign(
+        weights="weight", psu="psu", method="bootstrap", replicates=20, seed=42
+    )
+    res_eager_boot = estimate(sample_df, spec, design_boot, k=0.33, lazy=False)
+    res_lazy_boot = estimate(sample_df, spec, design_boot, k=0.33, lazy=True).collect()
+    assert_frame_equal(
+        res_eager_boot.estimates(), res_lazy_boot.estimates(), check_exact=False, atol=1e-10
+    )
+
+    # JKn
+    design_jkn = ReplicateDesign(weights="weight", psu="psu", strata="region", method="JKn")
+    res_eager_jkn = estimate(sample_df, spec, design_jkn, k=0.33, lazy=False)
+    res_lazy_jkn = estimate(sample_df, spec, design_jkn, k=0.33, lazy=True).collect()
+    assert_frame_equal(
+        res_eager_jkn.estimates(), res_lazy_jkn.estimates(), check_exact=False, atol=1e-10
+    )
+
+    # BRR (with 2 PSUs per stratum)
+    df_brr = sample_df.with_columns(
+        pl.when(pl.col("psu") <= 2)
+        .then(pl.lit("Stratum1"))
+        .otherwise(pl.lit("Stratum2"))
+        .alias("strata_brr"),
+        pl.when(pl.col("psu") % 2 == 1)
+        .then(pl.lit("PSU1"))
+        .otherwise(pl.lit("PSU2"))
+        .alias("psu_brr"),
+    )
+    design_brr = ReplicateDesign(
+        weights="weight", psu="psu_brr", strata="strata_brr", method="BRR"
+    )
+    res_eager_brr = estimate(df_brr, spec, design_brr, k=0.33, lazy=False)
+    res_lazy_brr = estimate(df_brr, spec, design_brr, k=0.33, lazy=True).collect()
+    assert_frame_equal(
+        res_eager_brr.estimates(), res_lazy_brr.estimates(), check_exact=False, atol=1e-10
+    )
+
+
+def test_isolated_process_execution(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2"], "d2": ["ind3"]})
+    design = SurveyDesign(weights="weight", psu="psu")
+
+    cfg_isolated = ExecutionConfig(max_threads=2, isolated_process=True)
+    res_normal = estimate(sample_df, spec, design, k=0.33)
+    res_isolated = estimate(sample_df, spec, design, k=0.33, resources=cfg_isolated)
+
+    assert_frame_equal(
+        res_normal.estimates(), res_isolated.estimates(), check_exact=False, atol=1e-10
+    )

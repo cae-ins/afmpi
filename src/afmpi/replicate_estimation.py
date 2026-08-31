@@ -23,11 +23,16 @@ _REPWGT_PREFIX = "__afmpi_repwgt_"
 
 def replicate_weight_expressions(
     design: ReplicateDesign,
-    frame: pl.DataFrame | None = None,
+    frame: pl.DataFrame | pl.LazyFrame | None = None,
 ) -> list[pl.Expr]:
     """One n_i^(r) expression per replicate, in replicate order."""
 
-    has_n = frame is not None and WEIGHT in frame.columns
+    frame_cols = (
+        frame.columns
+        if isinstance(frame, pl.DataFrame)
+        else (frame.collect_schema().names() if isinstance(frame, pl.LazyFrame) else ())
+    )
+    has_n = frame is not None and WEIGHT in frame_cols
     base_w = (
         pl.col(WEIGHT)
         if has_n
@@ -38,7 +43,7 @@ def replicate_weight_expressions(
 
     rep_cols = design.replicate_weights
     if rep_cols is None and frame is not None:
-        found = [c for c in frame.columns if c.startswith(_REPWGT_PREFIX)]
+        found = [c for c in frame_cols if c.startswith(_REPWGT_PREFIX)]
         if found:
             rep_cols = tuple(found)
 
@@ -57,10 +62,36 @@ def replicate_weight_expressions(
     return exprs
 
 
+def _get_strata_psu_map(
+    frame: pl.DataFrame | pl.LazyFrame, strata_col: str | None, psu_col: str
+) -> tuple[list[str], dict[str, list[str]]]:
+    lf = frame.lazy() if isinstance(frame, pl.DataFrame) else frame
+    s_expr = (
+        pl.col(strata_col).cast(pl.String).fill_null("__afmpi_null__")
+        if strata_col is not None
+        else pl.lit("__afmpi_all__")
+    )
+    p_expr = pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__")
+    pairs = lf.select(s_expr.alias("s"), p_expr.alias("p")).unique().sort(["s", "p"]).collect()
+    strata_list = pairs["s"].unique().sort().to_list()
+    psu_map: dict[str, list[str]] = {}
+    for s_val in strata_list:
+        psu_map[s_val] = pairs.filter(pl.col("s") == s_val)["p"].to_list()
+    return strata_list, psu_map
+
+
+def _get_psu_list(
+    frame: pl.DataFrame | pl.LazyFrame, psu_col: str
+) -> list[str]:
+    lf = frame.lazy() if isinstance(frame, pl.DataFrame) else frame
+    p_expr = pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__")
+    return lf.select(p_expr.alias("p")).unique().sort("p").collect()["p"].to_list()
+
+
 def generate_replicate_weights(
-    frame: pl.DataFrame,
+    frame: pl.DataFrame | pl.LazyFrame,
     design: ReplicateDesign,
-) -> tuple[pl.DataFrame, tuple[str, ...], float, tuple[float, ...]]:
+) -> tuple[pl.DataFrame | pl.LazyFrame, tuple[str, ...], float, tuple[float, ...]]:
     """Materialise the replicate weight columns, and their scale/rscales."""
 
     if design.method not in ("JK1", "JKn", "BRR", "Fay_BRR", "bootstrap", "SDR"):
@@ -77,35 +108,14 @@ def generate_replicate_weights(
         psu_col = design.psu
         strata_col = design.strata
 
-        if strata_col is not None:
-            strata_df = (
-                frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
-                .unique()
-                .sort("strata_str")
-            )
-            strata_list = strata_df["strata_str"].to_list()
-        else:
-            strata_list = ["__afmpi_all__"]
-
-        psu_map: dict[str, list[str]] = {}
+        strata_list, psu_map = _get_strata_psu_map(frame, strata_col, psu_col)
         for h_key in strata_list:
-            if strata_col is not None:
-                sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
-            else:
-                sub_frame = frame
-            psu_in_h = (
-                sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
-                .unique()
-                .sort("psu_str")["psu_str"]
-                .to_list()
-            )
-            m_h = len(psu_in_h)
+            m_h = len(psu_map[h_key])
             if m_h < 2:
                 raise ValueError(
                     f"stratum {h_key!r} contains only {m_h} PSU; "
                     "bootstrap requires at least 2 PSUs per stratum"
                 )
-            psu_map[h_key] = psu_in_h
 
         R = design.replicates if design.replicates is not None else 200
         if R < 2:
@@ -142,11 +152,18 @@ def generate_replicate_weights(
                     if cnt > 0:
                         factor = (m_h / (m_h - 1.0)) * cnt
                         if strata_col is not None:
-                            cond = (pl.col(strata_col).cast(pl.String) == h_key) & (
-                                pl.col(psu_col).cast(pl.String) == p_name
+                            cond = (
+                                pl.col(strata_col).cast(pl.String).fill_null("__afmpi_null__")
+                                == h_key
+                            ) & (
+                                pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__")
+                                == p_name
                             )
                         else:
-                            cond = pl.col(psu_col).cast(pl.String) == p_name
+                            cond = (
+                                pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__")
+                                == p_name
+                            )
 
                         if expr_builder is None:
                             expr_builder = pl.when(cond).then(base_w * factor)
@@ -172,29 +189,10 @@ def generate_replicate_weights(
         psu_col = design.psu
         strata_col = design.strata
 
-        if strata_col is not None:
-            strata_df = (
-                frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
-                .unique()
-                .sort("strata_str")
-            )
-            strata_list = strata_df["strata_str"].to_list()
-        else:
-            strata_list = ["__afmpi_all__"]
-
+        strata_list, psu_map = _get_strata_psu_map(frame, strata_col, psu_col)
         all_psus: list[tuple[str, str]] = []
         for h_key in strata_list:
-            if strata_col is not None:
-                sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
-            else:
-                sub_frame = frame
-            psu_in_h = (
-                sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
-                .unique()
-                .sort("psu_str")["psu_str"]
-                .to_list()
-            )
-            for p_key in psu_in_h:
+            for p_key in psu_map[h_key]:
                 all_psus.append((h_key, p_key))
 
         m = len(all_psus)
@@ -232,11 +230,15 @@ def generate_replicate_weights(
                 factor = 1.0 + two_pow_minus_1_5 * diff
 
                 if strata_col is not None:
-                    cond = (pl.col(strata_col).cast(pl.String) == h_key) & (
-                        pl.col(psu_col).cast(pl.String) == p_name
+                    cond = (
+                        pl.col(strata_col).cast(pl.String).fill_null("__afmpi_null__") == h_key
+                    ) & (
+                        pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == p_name
                     )
                 else:
-                    cond = pl.col(psu_col).cast(pl.String) == p_name
+                    cond = (
+                        pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == p_name
+                    )
 
                 if expr_builder is None:
                     expr_builder = pl.when(cond).then(base_w * factor)
@@ -264,37 +266,16 @@ def generate_replicate_weights(
         psu_col = design.psu
         strata_col = design.strata
 
-        if strata_col is not None:
-            strata_df = (
-                frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
-                .unique()
-                .sort("strata_str")
-            )
-            strata_list = strata_df["strata_str"].to_list()
-        else:
-            strata_list = ["__afmpi_all__"]
-
+        strata_list, psu_map = _get_strata_psu_map(frame, strata_col, psu_col)
         H = len(strata_list)
 
-        psu_map: dict[str, list[str]] = {}
         for h_key in strata_list:
-            if strata_col is not None:
-                sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
-            else:
-                sub_frame = frame
-            psu_in_h = (
-                sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
-                .unique()
-                .sort("psu_str")["psu_str"]
-                .to_list()
-            )
-            m_h = len(psu_in_h)
+            m_h = len(psu_map[h_key])
             if m_h != 2:
                 raise ValueError(
                     f"stratum {h_key!r} contains {m_h} PSU; "
                     f"{design.method} requires exactly 2 PSUs per stratum"
                 )
-            psu_map[h_key] = psu_in_h
 
         k = math.ceil(math.log2(H + 1))
         R = 2**k
@@ -330,11 +311,15 @@ def generate_replicate_weights(
                 sel_psu = psus[0] if delta_rh == 1 else psus[1]
 
                 if strata_col is not None:
-                    cond = (pl.col(strata_col).cast(pl.String) == h_key) & (
-                        pl.col(psu_col).cast(pl.String) == sel_psu
+                    cond = (
+                        pl.col(strata_col).cast(pl.String).fill_null("__afmpi_null__") == h_key
+                    ) & (
+                        pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == sel_psu
                     )
                 else:
-                    cond = pl.col(psu_col).cast(pl.String) == sel_psu
+                    cond = (
+                        pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == sel_psu
+                    )
                 sel_conds.append(cond)
 
             combined_sel = sel_conds[0]
@@ -371,12 +356,7 @@ def generate_replicate_weights(
             raise ValueError("psu column must be specified for JK1 replicate weight generation")
 
         psu_col = design.psu
-        psu_df = (
-            frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
-            .unique()
-            .sort("psu_str")
-        )
-        psu_list = psu_df["psu_str"].to_list()
+        psu_list = _get_psu_list(frame, psu_col)
         m = len(psu_list)
         if m < 2:
             raise ValueError("JK1 requires at least 2 PSUs")
@@ -388,7 +368,9 @@ def generate_replicate_weights(
             col_names.append(col_name)
             target_psu = psu_list[r]
             expr = (
-                pl.when(pl.col(psu_col).cast(pl.String) == target_psu)
+                pl.when(
+                    pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == target_psu
+                )
                 .then(0.0)
                 .otherwise(base_w * (m / (m - 1)))
                 .alias(col_name)
@@ -412,50 +394,36 @@ def generate_replicate_weights(
     psu_col = design.psu
     strata_col = design.strata
 
-    if strata_col is not None:
-        strata_df = (
-            frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
-            .unique()
-            .sort("strata_str")
-        )
-        strata_list = strata_df["strata_str"].to_list()
-    else:
-        strata_list = ["__afmpi_all__"]
-
+    strata_list, psu_map = _get_strata_psu_map(frame, strata_col, psu_col)
     col_names = []
     rscales_list: list[float] = []
     exprs_to_add = []
     replicate_index = 0
 
     for h_key in strata_list:
-        if strata_col is not None:
-            sub_frame = frame.filter(pl.col(strata_col).cast(pl.String) == h_key)
-        else:
-            sub_frame = frame
-        psu_in_h = (
-            sub_frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
-            .unique()
-            .sort("psu_str")["psu_str"]
-            .to_list()
-        )
-        m_h = len(psu_in_h)
+        psus = psu_map[h_key]
+        m_h = len(psus)
         if m_h < 2:
             raise ValueError(
                 f"stratum {h_key!r} contains only {m_h} PSU; "
                 "JKn requires at least 2 PSUs per stratum"
             )
 
-        for c_psu in psu_in_h:
+        for c_psu in psus:
             replicate_index += 1
             col_name = f"{_REPWGT_PREFIX}{replicate_index}"
             col_names.append(col_name)
             rscales_list.append((m_h - 1) / m_h)
 
             if strata_col is not None:
-                cond_same_psu = (pl.col(strata_col).cast(pl.String) == h_key) & (
-                    pl.col(psu_col).cast(pl.String) == c_psu
+                cond_same_psu = (
+                    pl.col(strata_col).cast(pl.String).fill_null("__afmpi_null__") == h_key
+                ) & (
+                    pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == c_psu
                 )
-                cond_same_stratum = pl.col(strata_col).cast(pl.String) == h_key
+                cond_same_stratum = (
+                    pl.col(strata_col).cast(pl.String).fill_null("__afmpi_null__") == h_key
+                )
                 expr = (
                     pl.when(cond_same_psu)
                     .then(0.0)
@@ -465,7 +433,9 @@ def generate_replicate_weights(
                     .alias(col_name)
                 )
             else:
-                cond_same_psu = pl.col(psu_col).cast(pl.String) == c_psu
+                cond_same_psu = (
+                    pl.col(psu_col).cast(pl.String).fill_null("__afmpi_null__") == c_psu
+                )
                 expr = (
                     pl.when(cond_same_psu)
                     .then(0.0)

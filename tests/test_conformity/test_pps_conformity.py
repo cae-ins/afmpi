@@ -97,6 +97,53 @@ def test_pps_conformity():
         assert row["df"] == val["df"], f"Mismatch in {suffix}_hajek df"
 
 
+def test_pps_conformity_lazy():
+    """Verify PPS lazy estimation against R reference."""
+    ref_file = REF_DIR / "pps.json"
+    with open(ref_file) as f:
+        ref = json.load(f)
+
+    tol = ref["tolerance"]
+    df_pps, _ = generate_pps(ref["generator_seed"])
+    spec = Specification({"d": ["i0", "i1", "i2", "i3"]})
+
+    # 1. PPS With Replacement lazy
+    des_wr = SurveyDesign(
+        weights="w",
+        strata="stratum",
+        psu="psu",
+        pps=PPSDesign(method="with_replacement", inclusion_probability="pi"),
+    )
+    res_wr = estimate(df_pps, spec, des_wr, k=0.5, lazy=True, streaming=True).collect()
+    est_wr = res_wr.estimates()
+
+    for suffix in ["H", "M0", "A"]:
+        val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_wr")
+        row = est_wr.filter(pl.col("measure") == suffix).row(0, named=True)
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"])
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"])
+        assert row["df"] == val["df"]
+
+    # 2. Hajek lazy
+    des_hajek = SurveyDesign(
+        weights="w",
+        strata="stratum",
+        psu="psu",
+        pps=PPSDesign(
+            method="without_replacement", inclusion_probability="pi", variance="hajek"
+        ),
+    )
+    res_hajek = estimate(df_pps, spec, des_hajek, k=0.5, lazy=True, streaming=True).collect()
+    est_hajek = res_hajek.estimates()
+
+    for suffix in ["H", "M0", "A"]:
+        val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_hajek")
+        row = est_hajek.filter(pl.col("measure") == suffix).row(0, named=True)
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"])
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"])
+        assert row["df"] == val["df"]
+
+
 @pytest.mark.optional
 def test_pps_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
