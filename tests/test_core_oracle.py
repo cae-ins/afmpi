@@ -78,9 +78,7 @@ DF_STRAT = pl.DataFrame(
         "i3": [1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0],
     }
 )
-DESIGN_STRAT = SurveyDesign(
-    weights="w", household_size="size", strata="stratum", psu="psu"
-)
+DESIGN_STRAT = SurveyDesign(weights="w", household_size="size", strata="stratum", psu="psu")
 
 
 def test_stratified_oracle_against_r_survey():
@@ -131,9 +129,7 @@ DF_LAYOUT = pl.DataFrame(
         "region": ["A", "A", "B", "B", "A", "A", "A", "A", "B", "B", "A", "A"],
     }
 )
-DESIGN_LAYOUT = SurveyDesign(
-    weights="w", household_size="size", strata="strate", psu="grappe"
-)
+DESIGN_LAYOUT = SurveyDesign(weights="w", household_size="size", strata="strate", psu="grappe")
 
 
 def test_domain_oracle_against_r_survey():

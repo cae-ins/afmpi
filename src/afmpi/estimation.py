@@ -7,19 +7,20 @@ the Taylor path (linearization), Replication path, or Census path is called.
 
 from __future__ import annotations
 
+import os
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite, sqrt
 from numbers import Real
-import os
-import warnings
 
 import pandas as pd
 import polars as pl
 from scipy import stats
 
-from . import backend, change_over_time, deprivation, domain as domain_module, estimands as estimands_module
-from . import linearization
+from . import backend, change_over_time, deprivation, linearization
+from . import domain as domain_module
+from . import estimands as estimands_module
 from .census_design import CensusDesign
 from .deprivation import DeprivationMatrix
 from .design_base import Design
@@ -46,7 +47,6 @@ from .variance import (
     design_vcov,
     standard_error,
 )
-
 
 DECOMPOSITION_TOLERANCE = 1e-9
 
@@ -356,12 +356,16 @@ def _estimate_lazy(
         g_col = deprivation.deprived_column(index)
         obs_col = deprivation.observed_column(index)
         contrib_col = deprivation.contribution_column(index)
-        extra_exprs.extend([
-            pl.col(indicator).cast(pl.Float64).alias(g_col),
-            pl.lit(1.0, dtype=pl.Float64).alias(obs_col),
-            (pl.col(indicator).cast(pl.Float64) * w).alias(contrib_col),
-        ])
-    score_expr = pl.sum_horizontal([pl.col(ind).cast(pl.Float64) * w for ind, w in spec.indicator_weights.items()])
+        extra_exprs.extend(
+            [
+                pl.col(indicator).cast(pl.Float64).alias(g_col),
+                pl.lit(1.0, dtype=pl.Float64).alias(obs_col),
+                (pl.col(indicator).cast(pl.Float64) * w).alias(contrib_col),
+            ]
+        )
+    score_expr = pl.sum_horizontal(
+        [pl.col(ind).cast(pl.Float64) * w for ind, w in spec.indicator_weights.items()]
+    )
     lf_scored = lf_valid.with_columns(score_expr.alias(deprivation.SCORE), *extra_exprs)
     lf_scored = _add_design_identifiers_lazy(lf_scored, design)
 
@@ -392,7 +396,9 @@ def _estimate_lazy(
         )
     else:
         group_cols = _stage_group_columns_lazy(lf_scored, design)
-        plan_nat = linearization.cluster_sums_lazy(lf_scored, all_k_estimands, weight=deprivation.WEIGHT, group_columns=group_cols)
+        plan_nat = linearization.cluster_sums_lazy(
+            lf_scored, all_k_estimands, weight=deprivation.WEIGHT, group_columns=group_cols
+        )
 
     over_plans: list[pl.LazyFrame] = []
     for var in variables:
@@ -427,12 +433,14 @@ def _estimate_lazy(
     diag_rows: list[dict[str, str]] = []
 
     if projected_columns is not None:
-        diag_rows.append({
-            "topic": "projection_pushdown",
-            "context": "from_parquet",
-            "decision": "selected_columns",
-            "detail": ", ".join(sorted(projected_columns)),
-        })
+        diag_rows.append(
+            {
+                "topic": "projection_pushdown",
+                "context": "from_parquet",
+                "decision": "selected_columns",
+                "detail": ", ".join(sorted(projected_columns)),
+            }
+        )
 
     nat_rows: list[dict[str, object]] = []
 
@@ -449,8 +457,13 @@ def _estimate_lazy(
             ratios = tuple(
                 linearization.RatioTotals(
                     estimand=item,
-                    numerator=float(nat_dict.get(linearization._NUMERATOR_PREFIX + prefix + item.key) or 0.0),
-                    denominator=float(nat_dict.get(linearization._DENOMINATOR_PREFIX + prefix + item.key) or 0.0),
+                    numerator=float(
+                        nat_dict.get(linearization._NUMERATOR_PREFIX + prefix + item.key) or 0.0
+                    ),
+                    denominator=float(
+                        nat_dict.get(linearization._DENOMINATOR_PREFIX + prefix + item.key)
+                        or 0.0
+                    ),
                 )
                 for item in raw_estimands
             )
@@ -458,7 +471,9 @@ def _estimate_lazy(
                 pop = ratios[0].denominator
             degrees = DesignDegrees(psus=0, strata=0, lonely_strata=0, override_df=0)
             keys = tuple(item.key for item in raw_estimands)
-            report = VarianceReport(values={k: 0.0 for k in keys}, degrees=degrees, population=pop, observations=obs)
+            report = VarianceReport(
+                values={k: 0.0 for k in keys}, degrees=degrees, population=pop, observations=obs
+            )
             nat_rows = _context_rows(ratios, report, cutoff, None, None, ci_method, level)
             rows.extend(nat_rows)
             national_population = pop
@@ -467,7 +482,9 @@ def _estimate_lazy(
             for idx, variable in enumerate(variables):
                 over_df = over_res[idx]
                 over_dicts = over_df.to_dicts()
-                over_dicts.sort(key=lambda r: str(r[variable]) if r[variable] is not None else "")
+                over_dicts.sort(
+                    key=lambda r: str(r[variable]) if r[variable] is not None else ""
+                )
                 share_total = 0.0
                 weighted_m0 = 0.0
                 for row_dict in over_dicts:
@@ -480,15 +497,32 @@ def _estimate_lazy(
                     sub_ratios = tuple(
                         linearization.RatioTotals(
                             estimand=item,
-                            numerator=float(row_dict.get(linearization._NUMERATOR_PREFIX + prefix + item.key) or 0.0),
-                            denominator=float(row_dict.get(linearization._DENOMINATOR_PREFIX + prefix + item.key) or 0.0),
+                            numerator=float(
+                                row_dict.get(
+                                    linearization._NUMERATOR_PREFIX + prefix + item.key
+                                )
+                                or 0.0
+                            ),
+                            denominator=float(
+                                row_dict.get(
+                                    linearization._DENOMINATOR_PREFIX + prefix + item.key
+                                )
+                                or 0.0
+                            ),
                         )
                         for item in raw_estimands
                     )
                     if not sub_pop and sub_ratios:
                         sub_pop = sub_ratios[0].denominator
-                    sub_report = VarianceReport(values={k: 0.0 for k in keys}, degrees=degrees, population=sub_pop, observations=sub_obs)
-                    sub_rows = _context_rows(sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level)
+                    sub_report = VarianceReport(
+                        values={k: 0.0 for k in keys},
+                        degrees=degrees,
+                        population=sub_pop,
+                        observations=sub_obs,
+                    )
+                    sub_rows = _context_rows(
+                        sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level
+                    )
                     rows.extend(sub_rows)
 
                     if national_population:
@@ -499,17 +533,23 @@ def _estimate_lazy(
                             weighted_m0 += share * subgroup_m0
 
                 if national_m0 is not None:
-                    decomposition.append({
-                        "k": cutoff,
-                        "over": variable,
-                        "shares": share_total,
-                        "M0": national_m0,
-                        "decomposed_M0": weighted_m0,
-                        "error": abs(weighted_m0 - national_m0),
-                    })
+                    decomposition.append(
+                        {
+                            "k": cutoff,
+                            "over": variable,
+                            "shares": share_total,
+                            "M0": national_m0,
+                            "decomposed_M0": weighted_m0,
+                            "error": abs(weighted_m0 - national_m0),
+                        }
+                    )
         else:
-            ratios, report = _taylor_report(nat_sub, raw_estimands, tuple(item.key for item in raw_estimands), design)  # type: ignore[arg-type]
-            _check_report_diags(report, None, None, cutoff, ratios, design, ci_method, diag_rows)
+            ratios, report = _taylor_report(
+                nat_sub, raw_estimands, tuple(item.key for item in raw_estimands), design
+            )  # type: ignore[arg-type]
+            _check_report_diags(
+                report, None, None, cutoff, ratios, design, ci_method, diag_rows
+            )
             nat_rows = _context_rows(ratios, report, cutoff, None, None, ci_method, level)
             rows.extend(nat_rows)
             national_population = report.population
@@ -517,15 +557,37 @@ def _estimate_lazy(
 
             for idx, variable in enumerate(variables):
                 over_df = over_res[idx]
-                subgroups_list = sorted([str(v) for v in over_df.select(variable).unique().to_series().to_list() if v is not None])
+                subgroups_list = sorted(
+                    [
+                        str(v)
+                        for v in over_df.select(variable).unique().to_series().to_list()
+                        if v is not None
+                    ]
+                )
                 share_total = 0.0
                 weighted_m0 = 0.0
                 for subgroup in subgroups_list:
                     sub_sums = over_df.filter(pl.col(variable).cast(pl.String) == subgroup)
                     sub_sub = _extract_cutoff_sums(sub_sums, raw_estimands, prefix)
-                    sub_ratios, sub_report = _taylor_report(sub_sub, raw_estimands, tuple(item.key for item in raw_estimands), design)  # type: ignore[arg-type]
-                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_ratios, design, ci_method, diag_rows)
-                    sub_rows = _context_rows(sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level)
+                    sub_ratios, sub_report = _taylor_report(
+                        sub_sub,
+                        raw_estimands,
+                        tuple(item.key for item in raw_estimands),
+                        design,
+                    )  # type: ignore[arg-type]
+                    _check_report_diags(
+                        sub_report,
+                        variable,
+                        subgroup,
+                        cutoff,
+                        sub_ratios,
+                        design,
+                        ci_method,
+                        diag_rows,
+                    )
+                    sub_rows = _context_rows(
+                        sub_ratios, sub_report, cutoff, variable, subgroup, ci_method, level
+                    )
                     rows.extend(sub_rows)
 
                     if national_population:
@@ -536,14 +598,16 @@ def _estimate_lazy(
                             weighted_m0 += share * subgroup_m0
 
                 if national_m0 is not None:
-                    decomposition.append({
-                        "k": cutoff,
-                        "over": variable,
-                        "shares": share_total,
-                        "M0": national_m0,
-                        "decomposed_M0": weighted_m0,
-                        "error": abs(weighted_m0 - national_m0),
-                    })
+                    decomposition.append(
+                        {
+                            "k": cutoff,
+                            "over": variable,
+                            "shares": share_total,
+                            "M0": national_m0,
+                            "decomposed_M0": weighted_m0,
+                            "error": abs(weighted_m0 - national_m0),
+                        }
+                    )
 
     estimates = pl.DataFrame(rows, schema=_ESTIMATE_SCHEMA)
     decomposition_frame = pl.DataFrame(
@@ -566,7 +630,9 @@ def _estimate_lazy(
         "decision": pl.String,
         "detail": pl.String,
     }
-    diagnostics_frame = pl.DataFrame(diag_rows, schema=_DIAGNOSTICS_SCHEMA).unique(maintain_order=True)
+    diagnostics_frame = pl.DataFrame(diag_rows, schema=_DIAGNOSTICS_SCHEMA).unique(
+        maintain_order=True
+    )
 
     out_kind = "pandas" if input_kind == "pandas" else "polars"
 
@@ -621,24 +687,36 @@ def _add_design_identifiers_lazy(lf: pl.LazyFrame, design: Design) -> pl.LazyFra
             s_name = design.strata
             p_name = design.psu
             s_expr = pl.col(s_name).cast(pl.String) if s_name else pl.lit("__afmpi_all__")
-            p_expr = pl.col(p_name).cast(pl.String) if p_name else pl.int_range(0, pl.len()).cast(pl.String)
-            exprs.extend([
-                s_expr.alias(deprivation.STRATUM),
-                p_expr.alias(deprivation.PSU),
-                pl.lit(0.0).alias(deprivation.fraction_column(1)),
-            ])
+            p_expr = (
+                pl.col(p_name).cast(pl.String)
+                if p_name
+                else pl.int_range(0, pl.len()).cast(pl.String)
+            )
+            exprs.extend(
+                [
+                    s_expr.alias(deprivation.STRATUM),
+                    p_expr.alias(deprivation.PSU),
+                    pl.lit(0.0).alias(deprivation.fraction_column(1)),
+                ]
+            )
         else:
             for idx, stage in enumerate(stages, start=1):
                 s_col = deprivation.stratum_column(idx)
                 p_col = deprivation.psu_column(idx)
                 f_col = deprivation.fraction_column(idx)
-                s_expr = pl.col(stage.strata).cast(pl.String) if stage.strata else pl.lit(f"__afmpi_all{idx}__")
+                s_expr = (
+                    pl.col(stage.strata).cast(pl.String)
+                    if stage.strata
+                    else pl.lit(f"__afmpi_all{idx}__")
+                )
                 p_expr = pl.col(stage.id).cast(pl.String)
-                exprs.extend([
-                    s_expr.alias(s_col),
-                    p_expr.alias(p_col),
-                    pl.lit(0.0).alias(f_col),
-                ])
+                exprs.extend(
+                    [
+                        s_expr.alias(s_col),
+                        p_expr.alias(p_col),
+                        pl.lit(0.0).alias(f_col),
+                    ]
+                )
         return lf.with_columns(exprs)
     return lf
 
@@ -693,7 +771,10 @@ def _check_report_diags(
                 "topic": "lonely_psu",
                 "context": ctx,
                 "decision": policy,
-                "detail": f"{deg.lonely_strata} lonely strata (keys: {deg.lonely_strata_keys}) handled by policy '{policy}'",
+                "detail": (
+                    f"{deg.lonely_strata} lonely strata (keys: {deg.lonely_strata_keys}) "
+                    f"handled by policy '{policy}'"
+                ),
             }
         )
 
@@ -714,7 +795,10 @@ def _check_report_diags(
                     "topic": "undefined_ratio",
                     "context": ctx,
                     "decision": "nan_estimate",
-                    "detail": f"estimand '{ratio.key}' has non-positive denominator ({ratio.denominator})",
+                    "detail": (
+                        f"estimand '{ratio.key}' has non-positive denominator "
+                        f"({ratio.denominator})"
+                    ),
                 }
             )
 
@@ -743,12 +827,14 @@ def _estimate_from_matrix(
     diag_rows: list[dict[str, str]] = []
 
     if projected_columns is not None:
-        diag_rows.append({
-            "topic": "projection_pushdown",
-            "context": "from_parquet",
-            "decision": "selected_columns",
-            "detail": ", ".join(sorted(projected_columns)),
-        })
+        diag_rows.append(
+            {
+                "topic": "projection_pushdown",
+                "context": "from_parquet",
+                "decision": "selected_columns",
+                "detail": ", ".join(sorted(projected_columns)),
+            }
+        )
 
     base = domain_module.POPULATION
     if domain is not None:
@@ -759,7 +845,9 @@ def _estimate_from_matrix(
                 "topic": "domain",
                 "context": str(domain),
                 "decision": "subpopulation_filter",
-                "detail": f"active rows: {frame.filter(base.weight() > 0).height}/{frame.height}",
+                "detail": (
+                    f"active rows: {frame.filter(base.weight() > 0).height}/{frame.height}"
+                ),
             }
         )
 
@@ -789,7 +877,16 @@ def _estimate_from_matrix(
             national_point, national_report = _taylor_report(
                 national_sums, estimands, keys, survey_design
             )
-            _check_report_diags(national_report, None, None, cutoff, national_point, design, ci_method, diag_rows)
+            _check_report_diags(
+                national_report,
+                None,
+                None,
+                cutoff,
+                national_point,
+                design,
+                ci_method,
+                diag_rows,
+            )
             national_rows = _context_rows(
                 national_point, national_report, cutoff, None, None, ci_method, level
             )
@@ -804,7 +901,9 @@ def _estimate_from_matrix(
                 weighted_m0 = 0.0
 
                 for subgroup in subgroups_list:
-                    sub_weight = base_weight * (pl.col(variable).cast(pl.String) == subgroup).cast(pl.Float64)
+                    sub_weight = base_weight * (
+                        pl.col(variable).cast(pl.String) == subgroup
+                    ).cast(pl.Float64)
                     sub_sums = linearization.cluster_sums(
                         frame,
                         estimands,
@@ -814,7 +913,16 @@ def _estimate_from_matrix(
                     sub_point, sub_report = _taylor_report(
                         sub_sums, estimands, keys, survey_design
                     )
-                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_point, design, ci_method, diag_rows)
+                    _check_report_diags(
+                        sub_report,
+                        variable,
+                        subgroup,
+                        cutoff,
+                        sub_point,
+                        design,
+                        ci_method,
+                        diag_rows,
+                    )
                     sub_rows = _context_rows(
                         sub_point, sub_report, cutoff, variable, subgroup, ci_method, level
                     )
@@ -880,7 +988,14 @@ def _estimate_from_matrix(
 
         rep_weight_exprs = replicate_weight_expressions(rep_design_active, frame_work)
         R = len(rep_weight_exprs)
-        df_strata = H if (rep_design.method == "JKn" and (rep_design.strata is not None or rep_design.replicate_weights is None)) else 1
+        df_strata = (
+            H
+            if (
+                rep_design.method == "JKn"
+                and (rep_design.strata is not None or rep_design.replicate_weights is None)
+            )
+            else 1
+        )
         degrees = DesignDegrees(
             psus=R,
             strata=df_strata,
@@ -892,9 +1007,7 @@ def _estimate_from_matrix(
             estimands = estimands_module.build(spec, cutoff)
             keys = tuple(item.key for item in estimands)
 
-            national_point = linearization.totals(
-                frame_work, estimands, weight=base_weight
-            )
+            national_point = linearization.totals(frame_work, estimands, weight=base_weight)
             national_reps = replicate_totals(
                 frame_work,
                 estimands,
@@ -917,7 +1030,16 @@ def _estimate_from_matrix(
                 population=pop,
                 observations=obs,
             )
-            _check_report_diags(national_report, None, None, cutoff, national_point, design, ci_method, diag_rows)
+            _check_report_diags(
+                national_report,
+                None,
+                None,
+                cutoff,
+                national_point,
+                design,
+                ci_method,
+                diag_rows,
+            )
             national_rows = _context_rows(
                 national_point, national_report, cutoff, None, None, ci_method, level
             )
@@ -939,12 +1061,8 @@ def _estimate_from_matrix(
                 weighted_m0 = 0.0
 
                 for subgroup in subgroups_list:
-                    sub_frame = frame_work.filter(
-                        pl.col(variable).cast(pl.String) == subgroup
-                    )
-                    sub_point = linearization.totals(
-                        sub_frame, estimands, weight=base_weight
-                    )
+                    sub_frame = frame_work.filter(pl.col(variable).cast(pl.String) == subgroup)
+                    sub_point = linearization.totals(sub_frame, estimands, weight=base_weight)
                     sub_pop = float(sub_frame.select(base_weight.sum()).item() or 0.0)
                     sub_obs = int(sub_frame.filter(base_weight > 0).height)
 
@@ -963,7 +1081,16 @@ def _estimate_from_matrix(
                         population=sub_pop,
                         observations=sub_obs,
                     )
-                    _check_report_diags(sub_report, variable, subgroup, cutoff, sub_point, design, ci_method, diag_rows)
+                    _check_report_diags(
+                        sub_report,
+                        variable,
+                        subgroup,
+                        cutoff,
+                        sub_point,
+                        design,
+                        ci_method,
+                        diag_rows,
+                    )
                     sub_rows = _context_rows(
                         sub_point, sub_report, cutoff, variable, subgroup, ci_method, level
                     )
@@ -1001,9 +1128,7 @@ def _estimate_from_matrix(
                 population=pop,
                 observations=obs,
             )
-            national_rows = _context_rows(
-                ratios, report, cutoff, None, None, ci_method, level
-            )
+            national_rows = _context_rows(ratios, report, cutoff, None, None, ci_method, level)
             rows.extend(national_rows)
             national_population = pop
             national_m0 = _pick(national_rows, "M0")
@@ -1067,12 +1192,14 @@ def _estimate_from_matrix(
     changes_frame = None
     if tvar is not None:
         if ci_method == "logit":
-            diag_rows.append({
-                "topic": "ci_logit",
-                "context": "changes",
-                "decision": "fallback_to_t",
-                "detail": "logit CI method replaced by 't' for change estimates",
-            })
+            diag_rows.append(
+                {
+                    "topic": "ci_logit",
+                    "context": "changes",
+                    "decision": "fallback_to_t",
+                    "detail": "logit CI method replaced by 't' for change estimates",
+                }
+            )
         changes_frame, time_diag_rows = change_over_time.compute_changes(
             matrix,
             cutoffs=cutoffs,
@@ -1092,7 +1219,9 @@ def _estimate_from_matrix(
         "decision": pl.String,
         "detail": pl.String,
     }
-    diagnostics_frame = pl.DataFrame(diag_rows, schema=_DIAGNOSTICS_SCHEMA).unique(maintain_order=True)
+    diagnostics_frame = pl.DataFrame(diag_rows, schema=_DIAGNOSTICS_SCHEMA).unique(
+        maintain_order=True
+    )
 
     return EstimationResult(
         _estimates=estimates,
@@ -1276,15 +1405,25 @@ def _compute_vcov(
     convert_fn=None,
     design: Design | None = None,
 ) -> pl.DataFrame:
-    resolved_design = design if design is not None else (matrix.design if matrix is not None else None)
-    if resolved_design is not None and getattr(resolved_design, "variance_path", None) == "census":
+    resolved_design = (
+        design if design is not None else (matrix.design if matrix is not None else None)
+    )
+    if (
+        resolved_design is not None
+        and getattr(resolved_design, "variance_path", None) == "census"
+    ):
         measures_tuple = ("H", "A", "M0") if measures is None else tuple(measures)
-        matrix_rows = [{"term": m1, **{m2: 0.0 for m2 in measures_tuple}} for m1 in measures_tuple]
+        matrix_rows = [
+            {"term": m1, **{m2: 0.0 for m2 in measures_tuple}} for m1 in measures_tuple
+        ]
         res_df = pl.DataFrame(matrix_rows)
         return convert_fn(res_df) if convert_fn else res_df
 
     if matrix is None:
-        raise ValueError("vcov() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming")
+        raise ValueError(
+            "vcov() requires an in-memory result; re-run estimate() without "
+            "lazy=True/CensusDesign streaming"
+        )
 
     if k is None:
         if len(cutoffs) == 1:
@@ -1323,7 +1462,9 @@ def _compute_vcov(
         if over is None and subgroup is None:
             sums = linearization.cluster_sums(frame, estimands, group_columns=group_cols)
         else:
-            cells = linearization.cluster_sums(frame, estimands, group_columns=group_cols + (over,))
+            cells = linearization.cluster_sums(
+                frame, estimands, group_columns=group_cols + (over,)
+            )
             sums = _align(cells, universe, over, subgroup, group_cols)
 
         ratios = linearization.totals_from_clusters(sums, estimands)
@@ -1334,7 +1475,9 @@ def _compute_vcov(
     elif design_to_use.variance_path == "replication":
         rep_design: ReplicateDesign = design_to_use  # type: ignore[assignment]
         if rep_design.replicate_weights is None:
-            frame_work, repw_cols, scale, rscales = generate_replicate_weights(frame, rep_design)
+            frame_work, repw_cols, scale, rscales = generate_replicate_weights(
+                frame, rep_design
+            )
             rep_design_active = ReplicateDesign(
                 weights=rep_design.weights,
                 household_size=rep_design.household_size,
@@ -1352,21 +1495,36 @@ def _compute_vcov(
         else:
             frame_work = frame
             scale = rep_design.scale if rep_design.scale is not None else 1.0
-            rscales = rep_design.rscales if rep_design.rscales is not None else ((1.0,) * len(rep_design.replicate_weights))
+            rscales = (
+                rep_design.rscales
+                if rep_design.rscales is not None
+                else ((1.0,) * len(rep_design.replicate_weights))
+            )
             rep_design_active = rep_design
 
         rep_weight_exprs = replicate_weight_expressions(rep_design_active, frame_work)
 
         if over is None and subgroup is None:
             point = linearization.totals(frame_work, estimands)
-            replicates_list = replicate_totals(frame_work, estimands, rep_weight_exprs, batch_size=64)  # type: ignore[assignment]
+            replicates_list = replicate_totals(
+                frame_work, estimands, rep_weight_exprs, batch_size=64
+            )  # type: ignore[assignment]
         else:
             sub_frame = frame_work.filter(pl.col(over).cast(pl.String) == subgroup)
             point = linearization.totals(sub_frame, estimands)
-            sub_dict = replicate_totals(frame_work, estimands, rep_weight_exprs, group_column=over, batch_size=64)
+            sub_dict = replicate_totals(
+                frame_work, estimands, rep_weight_exprs, group_column=over, batch_size=64
+            )
             replicates_list = sub_dict.get(subgroup, [])  # type: ignore[assignment]
 
-        vcov_dict = replicate_vcov(point, replicates_list, measures_tuple, scale=scale, rscales=rscales, mse=rep_design_active.mse)
+        vcov_dict = replicate_vcov(
+            point,
+            replicates_list,
+            measures_tuple,
+            scale=scale,
+            rscales=rscales,
+            mse=rep_design_active.mse,
+        )
 
     else:
         vcov_dict = {(k1, k2): 0.0 for k1 in measures_tuple for k2 in measures_tuple}
@@ -1400,7 +1558,10 @@ def _compute_test(
     if matrix is not None and getattr(matrix.design, "variance_path", None) == "census":
         raise ValueError("a census has no sampling variance; a Wald test is not defined")
     if matrix is None:
-        raise ValueError("test() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming")
+        raise ValueError(
+            "test() requires an in-memory result; re-run estimate() without "
+            "lazy=True/CensusDesign streaming"
+        )
 
     if k is None:
         if len(cutoffs) == 1:
@@ -1431,7 +1592,10 @@ def _compute_test(
         elif isinstance(arg, domain_module.Domain):
             return arg, arg.label
         else:
-            raise TypeError(f"domain argument must be a string expression or (over, subgroup) tuple; got {arg!r}")
+            raise TypeError(
+                f"domain argument must be a string expression or (over, subgroup) tuple; "
+                f"got {arg!r}"
+            )
 
     dom_a, label_a = _parse_arg(a)
     if b is not None:
@@ -1453,29 +1617,43 @@ def _compute_test(
 
         w_a = dom_a.weight()
         sums_a = frame.group_by(list(group_cols)).agg(
-            (w_a * target_item.y).sum().alias(linearization._NUMERATOR_PREFIX + target_item.key),
-            (w_a * target_item.x).sum().alias(linearization._DENOMINATOR_PREFIX + target_item.key),
+            (w_a * target_item.y)
+            .sum()
+            .alias(linearization._NUMERATOR_PREFIX + target_item.key),
+            (w_a * target_item.x)
+            .sum()
+            .alias(linearization._DENOMINATOR_PREFIX + target_item.key),
             pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
             pl.len().alias("__afmpi_cluster_rows"),
         )
         ratios_a = linearization.totals_from_clusters(sums_a, (target_item,))
-        inf_a = linearization.cluster_influence(sums_a, ratios_a).rename({target_item.key: "inf_a"})
+        inf_a = linearization.cluster_influence(sums_a, ratios_a).rename(
+            {target_item.key: "inf_a"}
+        )
         r_a = ratios_a[0].value
 
         if dom_b is not None:
             w_b = dom_b.weight()
             sums_b = frame.group_by(list(group_cols)).agg(
-                (w_b * target_item.y).sum().alias(linearization._NUMERATOR_PREFIX + target_item.key),
-                (w_b * target_item.x).sum().alias(linearization._DENOMINATOR_PREFIX + target_item.key),
+                (w_b * target_item.y)
+                .sum()
+                .alias(linearization._NUMERATOR_PREFIX + target_item.key),
+                (w_b * target_item.x)
+                .sum()
+                .alias(linearization._DENOMINATOR_PREFIX + target_item.key),
                 pl.col(deprivation.WEIGHT).sum().alias("__afmpi_cluster_weight"),
                 pl.len().alias("__afmpi_cluster_rows"),
             )
             ratios_b = linearization.totals_from_clusters(sums_b, (target_item,))
-            inf_b = linearization.cluster_influence(sums_b, ratios_b).rename({target_item.key: "inf_b"})
+            inf_b = linearization.cluster_influence(sums_b, ratios_b).rename(
+                {target_item.key: "inf_b"}
+            )
             r_b = ratios_b[0].value
 
             join_cols = list(group_cols)
-            cluster_inf = inf_a.join(inf_b.select(*group_cols, "inf_b"), on=join_cols, how="left")
+            cluster_inf = inf_a.join(
+                inf_b.select(*group_cols, "inf_b"), on=join_cols, how="left"
+            )
             keys_test = ("inf_a", "inf_b")
         else:
             r_b = None
@@ -1499,7 +1677,9 @@ def _compute_test(
     elif design.variance_path == "replication":
         rep_design: ReplicateDesign = design  # type: ignore[assignment]
         if rep_design.replicate_weights is None:
-            frame_work, repw_cols, scale, rscales = generate_replicate_weights(frame, rep_design)
+            frame_work, repw_cols, scale, rscales = generate_replicate_weights(
+                frame, rep_design
+            )
             if rep_design.method == "JKn" and rep_design.strata is not None:
                 H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
             else:
@@ -1521,7 +1701,11 @@ def _compute_test(
         else:
             frame_work = frame
             scale = rep_design.scale if rep_design.scale is not None else 1.0
-            rscales = rep_design.rscales if rep_design.rscales is not None else ((1.0,) * len(rep_design.replicate_weights))
+            rscales = (
+                rep_design.rscales
+                if rep_design.rscales is not None
+                else ((1.0,) * len(rep_design.replicate_weights))
+            )
             if rep_design.method == "JKn" and rep_design.strata is not None:
                 H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
             else:
@@ -1530,30 +1714,64 @@ def _compute_test(
 
         rep_weight_exprs = replicate_weight_expressions(rep_design_active, frame_work)
         R = len(rep_weight_exprs)
-        df_strata = H if (rep_design.method == "JKn" and (rep_design.strata is not None or rep_design.replicate_weights is None)) else 1
-        full_degrees = DesignDegrees(psus=R, strata=df_strata, lonely_strata=0, override_df=rep_design.degf)
+        df_strata = (
+            H
+            if (
+                rep_design.method == "JKn"
+                and (rep_design.strata is not None or rep_design.replicate_weights is None)
+            )
+            else 1
+        )
+        full_degrees = DesignDegrees(
+            psus=R, strata=df_strata, lonely_strata=0, override_df=rep_design.degf
+        )
 
         w_a = dom_a.weight()
         pt_a = linearization.totals(frame_work, (target_item,), weight=w_a)[0]
         theta_a = pt_a.value
-        reps_a = replicate_totals(frame_work, (target_item,), [w * (w_a > 0).cast(pl.Float64) for w in rep_weight_exprs], batch_size=64)
+        reps_a = replicate_totals(
+            frame_work,
+            (target_item,),
+            [w * (w_a > 0).cast(pl.Float64) for w in rep_weight_exprs],
+            batch_size=64,
+        )
 
         if dom_b is not None:
             w_b = dom_b.weight()
             pt_b = linearization.totals(frame_work, (target_item,), weight=w_b)[0]
             theta_b = pt_b.value
-            reps_b = replicate_totals(frame_work, (target_item,), [w * (w_b > 0).cast(pl.Float64) for w in rep_weight_exprs], batch_size=64)
+            reps_b = replicate_totals(
+                frame_work,
+                (target_item,),
+                [w * (w_b > 0).cast(pl.Float64) for w in rep_weight_exprs],
+                batch_size=64,
+            )
         else:
             theta_b = None
             reps_b = None
 
-        theta_c_a = theta_a if rep_design_active.mse else sum(r[0].value for r in reps_a if r[0].value is not None) / R
-        v_aa = scale * sum(rscales[r] * ((reps_a[r][0].value - theta_c_a) ** 2) for r in range(R))
+        theta_c_a = (
+            theta_a
+            if rep_design_active.mse
+            else sum(r[0].value for r in reps_a if r[0].value is not None) / R
+        )
+        v_aa = scale * sum(
+            rscales[r] * ((reps_a[r][0].value - theta_c_a) ** 2) for r in range(R)
+        )
 
         if dom_b is not None:
-            theta_c_b = theta_b if rep_design_active.mse else sum(r[0].value for r in reps_b if r[0].value is not None) / R
-            v_bb = scale * sum(rscales[r] * ((reps_b[r][0].value - theta_c_b) ** 2) for r in range(R))
-            v_ab = scale * sum(rscales[r] * (reps_a[r][0].value - theta_c_a) * (reps_b[r][0].value - theta_c_b) for r in range(R))
+            theta_c_b = (
+                theta_b
+                if rep_design_active.mse
+                else sum(r[0].value for r in reps_b if r[0].value is not None) / R
+            )
+            v_bb = scale * sum(
+                rscales[r] * ((reps_b[r][0].value - theta_c_b) ** 2) for r in range(R)
+            )
+            v_ab = scale * sum(
+                rscales[r] * (reps_a[r][0].value - theta_c_a) * (reps_b[r][0].value - theta_c_b)
+                for r in range(R)
+            )
         else:
             v_bb = 0.0
             v_ab = 0.0
@@ -1588,7 +1806,7 @@ def _compute_test(
                 statistic = float("nan")
                 p_value = float("nan")
             else:
-                W = (estimate_val ** 2) / var_contrast
+                W = (estimate_val**2) / var_contrast
                 if dist == "F":
                     statistic = float(W / q)
                     p_value = float(stats.f.sf(statistic, q, df2))
@@ -1609,4 +1827,11 @@ def _compute_test(
     )
 
 
-__all__ = ["DECOMPOSITION_TOLERANCE", "LazyEstimation", "VarianceReport", "_compute_test", "_compute_vcov", "estimate"]
+__all__ = [
+    "DECOMPOSITION_TOLERANCE",
+    "LazyEstimation",
+    "VarianceReport",
+    "_compute_test",
+    "_compute_vcov",
+    "estimate",
+]

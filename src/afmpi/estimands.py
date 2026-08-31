@@ -119,38 +119,71 @@ def build(spec: Specification, k: float) -> tuple[RatioEstimand, ...]:
         estimands.extend(
             (
                 RatioEstimand(
-                    f"hd::{indicator}", "hd", g, observed,
-                    indicator, dimension, weights[indicator],
+                    f"hd::{indicator}",
+                    "hd",
+                    g,
+                    observed,
+                    indicator,
+                    dimension,
+                    weights[indicator],
                 ),
                 RatioEstimand(
-                    f"hdk::{indicator}", "hdk", g * poor, observed,
-                    indicator, dimension, weights[indicator],
+                    f"hdk::{indicator}",
+                    "hdk",
+                    g * poor,
+                    observed,
+                    indicator,
+                    dimension,
+                    weights[indicator],
                 ),
                 RatioEstimand(
-                    f"actb::{indicator}", "actb", weighted, one,
-                    indicator, dimension, weights[indicator],
+                    f"actb::{indicator}",
+                    "actb",
+                    weighted,
+                    one,
+                    indicator,
+                    dimension,
+                    weights[indicator],
                 ),
                 RatioEstimand(
-                    f"pctb::{indicator}", "pctb", weighted, censored,
-                    indicator, dimension, weights[indicator],
+                    f"pctb::{indicator}",
+                    "pctb",
+                    weighted,
+                    censored,
+                    indicator,
+                    dimension,
+                    weights[indicator],
                 ),
             )
         )
 
     positions = {indicator: index for index, indicator in enumerate(indicators)}
     for dimension, members in dimensions.items():
-        weighted = pl.sum_horizontal(
-            [pl.col(contribution_column(positions[item])) for item in members]
-        ) * poor
+        weighted = (
+            pl.sum_horizontal(
+                [pl.col(contribution_column(positions[item])) for item in members]
+            )
+            * poor
+        )
         estimands.extend(
             (
                 RatioEstimand(
-                    f"actb_dim::{dimension}", "actb_dim", weighted, one,
-                    None, dimension, spec.dimension_weights[dimension],
+                    f"actb_dim::{dimension}",
+                    "actb_dim",
+                    weighted,
+                    one,
+                    None,
+                    dimension,
+                    spec.dimension_weights[dimension],
                 ),
                 RatioEstimand(
-                    f"pctb_dim::{dimension}", "pctb_dim", weighted, censored,
-                    None, dimension, spec.dimension_weights[dimension],
+                    f"pctb_dim::{dimension}",
+                    "pctb_dim",
+                    weighted,
+                    censored,
+                    None,
+                    dimension,
+                    spec.dimension_weights[dimension],
                 ),
             )
         )

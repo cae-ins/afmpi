@@ -42,7 +42,15 @@ Issues = "https://github.com/cae-ins/afmpi/issues"
 test = [
   "psutil>=5.9",
   "pytest>=7",
+  "ruff>=0.1.0",
 ]
+
+[tool.ruff]
+line-length = 96
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/afmpi"]

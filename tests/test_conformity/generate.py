@@ -6,9 +6,7 @@ The same datasets can be exported to CSV for R reference scripts.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import polars as pl
@@ -63,7 +61,9 @@ def generate_stratified_srs(seed: int = DEFAULT_SEED, n_per_stratum: int = 40) -
     return pl.DataFrame(rows)
 
 
-def generate_cluster_1stage(seed: int = DEFAULT_SEED, n_clusters: int = 8, cluster_size: int = 15) -> pl.DataFrame:
+def generate_cluster_1stage(
+    seed: int = DEFAULT_SEED, n_clusters: int = 8, cluster_size: int = 15
+) -> pl.DataFrame:
     """Generate 1-stage Cluster sample (unstratified, 8 PSUs)."""
     rng = np.random.default_rng(seed)
     rows = []
@@ -123,7 +123,7 @@ def generate_stratified_cluster(
 
 def generate_multistage(seed: int = DEFAULT_SEED) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Generate 2-stage designs with FPC at each stage.
-    
+
     Returns:
         (df_fpc, df_census_stage1)
     """
@@ -134,9 +134,9 @@ def generate_multistage(seed: int = DEFAULT_SEED) -> tuple[pl.DataFrame, pl.Data
     uid = 1
     for s_idx, s in enumerate(["H1", "H2"]):
         for p_idx in [1, 2]:
-            psu = f"P{s_idx+1}_{p_idx}"
+            psu = f"P{s_idx + 1}_{p_idx}"
             for ssu_idx in [1, 2]:
-                ssu = f"S{s_idx+1}_{p_idx}_{ssu_idx}"
+                ssu = f"S{s_idx + 1}_{p_idx}_{ssu_idx}"
                 for h_idx in [1, 2]:
                     # Deterministic deprivation pattern
                     i0 = 1 if (s_idx + p_idx + ssu_idx + h_idx) % 2 == 0 else 0
@@ -163,7 +163,7 @@ def generate_multistage(seed: int = DEFAULT_SEED) -> tuple[pl.DataFrame, pl.Data
     # Stage 1 Census variant (f1 = 1.0, f2 = 0.5)
     rows_census = []
     uid = 1
-    for s_idx, s in enumerate(["H1"]):
+    for s in ["H1"]:
         for p_idx in [1, 2]:
             psu = f"P1_{p_idx}"
             for ssu_idx in [1, 2]:
@@ -195,17 +195,53 @@ def generate_multistage(seed: int = DEFAULT_SEED) -> tuple[pl.DataFrame, pl.Data
 
 def generate_pps(seed: int = DEFAULT_SEED) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Generate PPS sample with and without joint inclusion probabilities.
-    
+
     Returns:
         (df_pps, df_joint_probs)
     """
     rows = [
-        {"stratum": "H1", "psu": "P1", "w": 10.0, "pi": 0.2, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
-        {"stratum": "H1", "psu": "P1", "w": 10.0, "pi": 0.2, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
+        {
+            "stratum": "H1",
+            "psu": "P1",
+            "w": 10.0,
+            "pi": 0.2,
+            "i0": 1,
+            "i1": 1,
+            "i2": 0,
+            "i3": 1,
+        },
+        {
+            "stratum": "H1",
+            "psu": "P1",
+            "w": 10.0,
+            "pi": 0.2,
+            "i0": 1,
+            "i1": 0,
+            "i2": 1,
+            "i3": 0,
+        },
         {"stratum": "H1", "psu": "P2", "w": 5.0, "pi": 0.4, "i0": 0, "i1": 1, "i2": 0, "i3": 1},
         {"stratum": "H1", "psu": "P2", "w": 5.0, "pi": 0.4, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
-        {"stratum": "H2", "psu": "P3", "w": 4.0, "pi": 0.25, "i0": 1, "i1": 1, "i2": 1, "i3": 0},
-        {"stratum": "H2", "psu": "P3", "w": 4.0, "pi": 0.25, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
+        {
+            "stratum": "H2",
+            "psu": "P3",
+            "w": 4.0,
+            "pi": 0.25,
+            "i0": 1,
+            "i1": 1,
+            "i2": 1,
+            "i3": 0,
+        },
+        {
+            "stratum": "H2",
+            "psu": "P3",
+            "w": 4.0,
+            "pi": 0.25,
+            "i0": 1,
+            "i1": 0,
+            "i2": 0,
+            "i3": 1,
+        },
         {"stratum": "H2", "psu": "P4", "w": 2.0, "pi": 0.5, "i0": 0, "i1": 1, "i2": 1, "i3": 1},
         {"stratum": "H2", "psu": "P4", "w": 2.0, "pi": 0.5, "i0": 0, "i1": 0, "i2": 0, "i3": 0},
     ]
@@ -250,26 +286,148 @@ def generate_domains(seed: int = DEFAULT_SEED) -> pl.DataFrame:
     """Generate Stratified Cluster sample with domains crossing strata and small domains."""
     rows = [
         # Stratum 1
-        {"stratum": "S1", "psu": "P1", "w": 1.0, "region": "North", "group": "G1", "i0": 1, "i1": 1, "i2": 0, "i3": 1},
-        {"stratum": "S1", "psu": "P1", "w": 1.2, "region": "North", "group": "G1", "i0": 0, "i1": 1, "i2": 1, "i3": 0},
-        {"stratum": "S1", "psu": "P2", "w": 0.8, "region": "South", "group": "G1", "i0": 1, "i1": 0, "i2": 1, "i3": 0},
-        {"stratum": "S1", "psu": "P2", "w": 1.1, "region": "South", "group": "G2", "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {
+            "stratum": "S1",
+            "psu": "P1",
+            "w": 1.0,
+            "region": "North",
+            "group": "G1",
+            "i0": 1,
+            "i1": 1,
+            "i2": 0,
+            "i3": 1,
+        },
+        {
+            "stratum": "S1",
+            "psu": "P1",
+            "w": 1.2,
+            "region": "North",
+            "group": "G1",
+            "i0": 0,
+            "i1": 1,
+            "i2": 1,
+            "i3": 0,
+        },
+        {
+            "stratum": "S1",
+            "psu": "P2",
+            "w": 0.8,
+            "region": "South",
+            "group": "G1",
+            "i0": 1,
+            "i1": 0,
+            "i2": 1,
+            "i3": 0,
+        },
+        {
+            "stratum": "S1",
+            "psu": "P2",
+            "w": 1.1,
+            "region": "South",
+            "group": "G2",
+            "i0": 1,
+            "i1": 1,
+            "i2": 0,
+            "i3": 1,
+        },
         # Stratum 2
-        {"stratum": "S2", "psu": "P3", "w": 0.9, "region": "North", "group": "G1", "i0": 0, "i1": 0, "i2": 1, "i3": 0},
-        {"stratum": "S2", "psu": "P3", "w": 1.3, "region": "North", "group": "G2", "i0": 1, "i1": 0, "i2": 0, "i3": 1},
-        {"stratum": "S2", "psu": "P4", "w": 1.0, "region": "North", "group": "G2", "i0": 1, "i1": 1, "i2": 0, "i3": 0},
-        {"stratum": "S2", "psu": "P4", "w": 1.4, "region": "North", "group": "G2", "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {
+            "stratum": "S2",
+            "psu": "P3",
+            "w": 0.9,
+            "region": "North",
+            "group": "G1",
+            "i0": 0,
+            "i1": 0,
+            "i2": 1,
+            "i3": 0,
+        },
+        {
+            "stratum": "S2",
+            "psu": "P3",
+            "w": 1.3,
+            "region": "North",
+            "group": "G2",
+            "i0": 1,
+            "i1": 0,
+            "i2": 0,
+            "i3": 1,
+        },
+        {
+            "stratum": "S2",
+            "psu": "P4",
+            "w": 1.0,
+            "region": "North",
+            "group": "G2",
+            "i0": 1,
+            "i1": 1,
+            "i2": 0,
+            "i3": 0,
+        },
+        {
+            "stratum": "S2",
+            "psu": "P4",
+            "w": 1.4,
+            "region": "North",
+            "group": "G2",
+            "i0": 0,
+            "i1": 1,
+            "i2": 1,
+            "i3": 0,
+        },
         # Stratum 3
-        {"stratum": "S3", "psu": "P5", "w": 0.7, "region": "South", "group": "G1", "i0": 1, "i1": 0, "i2": 1, "i3": 1},
-        {"stratum": "S3", "psu": "P5", "w": 1.2, "region": "South", "group": "G2", "i0": 0, "i1": 1, "i2": 0, "i3": 1},
-        {"stratum": "S3", "psu": "P6", "w": 1.1, "region": "North", "group": "G1", "i0": 1, "i1": 1, "i2": 0, "i3": 0},
-        {"stratum": "S3", "psu": "P6", "w": 0.9, "region": "North", "group": "G3", "i0": 1, "i1": 0, "i2": 1, "i3": 0},
+        {
+            "stratum": "S3",
+            "psu": "P5",
+            "w": 0.7,
+            "region": "South",
+            "group": "G1",
+            "i0": 1,
+            "i1": 0,
+            "i2": 1,
+            "i3": 1,
+        },
+        {
+            "stratum": "S3",
+            "psu": "P5",
+            "w": 1.2,
+            "region": "South",
+            "group": "G2",
+            "i0": 0,
+            "i1": 1,
+            "i2": 0,
+            "i3": 1,
+        },
+        {
+            "stratum": "S3",
+            "psu": "P6",
+            "w": 1.1,
+            "region": "North",
+            "group": "G1",
+            "i0": 1,
+            "i1": 1,
+            "i2": 0,
+            "i3": 0,
+        },
+        {
+            "stratum": "S3",
+            "psu": "P6",
+            "w": 0.9,
+            "region": "North",
+            "group": "G3",
+            "i0": 1,
+            "i1": 0,
+            "i2": 1,
+            "i3": 0,
+        },
     ]
     return pl.DataFrame(rows)
 
 
 def generate_af_limits(seed: int = DEFAULT_SEED) -> dict[str, pl.DataFrame]:
-    """Generate datasets for boundary conditions of Alkire-Foster (zero poor, all poor, mixed)."""
+    """Generate datasets for boundary conditions of Alkire-Foster
+    (zero poor, all poor, mixed).
+    """
     rows_zero = [
         {"stratum": "S1", "psu": "P1", "w": 1.0, "i0": 0, "i1": 0, "i2": 0, "i3": 0},
         {"stratum": "S1", "psu": "P1", "w": 1.2, "i0": 0, "i1": 0, "i2": 0, "i3": 0},
@@ -330,7 +488,15 @@ def generate_data_limits(seed: int = DEFAULT_SEED) -> dict[str, pl.DataFrame]:
         {"stratum": "S1", "psu": "P2", "w": 1.0, "i0": 0, "i1": 1, "i2": 0, "i3": 1},
         # Stratum S2, PSU P3
         {"stratum": "S2", "psu": "P3", "w": 0.9, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
-        {"stratum": "S2", "psu": "P3", "w": 1.3, "i0": None, "i1": None, "i2": None, "i3": None},
+        {
+            "stratum": "S2",
+            "psu": "P3",
+            "w": 1.3,
+            "i0": None,
+            "i1": None,
+            "i2": None,
+            "i3": None,
+        },
         {"stratum": "S2", "psu": "P3", "w": 1.1, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
         # Stratum S2, PSU P4
         {"stratum": "S2", "psu": "P4", "w": 1.0, "i0": 1, "i1": 1, "i2": 1, "i3": 0},
@@ -347,16 +513,16 @@ def generate_replication(seed: int = DEFAULT_SEED) -> pl.DataFrame:
     """Generate Stratified Cluster sample for replicate weights (2 strata, 2 PSUs each)."""
     rows = [
         # Stratum S1: PSUs P1, P2 (3 obs each)
-        {"id": 1,  "stratum": "S1", "psu": "P1", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
-        {"id": 2,  "stratum": "S1", "psu": "P1", "w": 1.2, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
-        {"id": 3,  "stratum": "S1", "psu": "P1", "w": 0.8, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
-        {"id": 4,  "stratum": "S1", "psu": "P2", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
-        {"id": 5,  "stratum": "S1", "psu": "P2", "w": 0.9, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
-        {"id": 6,  "stratum": "S1", "psu": "P2", "w": 1.3, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
+        {"id": 1, "stratum": "S1", "psu": "P1", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 2, "stratum": "S1", "psu": "P1", "w": 1.2, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {"id": 3, "stratum": "S1", "psu": "P1", "w": 0.8, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
+        {"id": 4, "stratum": "S1", "psu": "P2", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 5, "stratum": "S1", "psu": "P2", "w": 0.9, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
+        {"id": 6, "stratum": "S1", "psu": "P2", "w": 1.3, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
         # Stratum S2: PSUs P3, P4 (3 obs each)
-        {"id": 7,  "stratum": "S2", "psu": "P3", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
-        {"id": 8,  "stratum": "S2", "psu": "P3", "w": 1.4, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
-        {"id": 9,  "stratum": "S2", "psu": "P3", "w": 0.7, "i0": 1, "i1": 0, "i2": 1, "i3": 1},
+        {"id": 7, "stratum": "S2", "psu": "P3", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
+        {"id": 8, "stratum": "S2", "psu": "P3", "w": 1.4, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {"id": 9, "stratum": "S2", "psu": "P3", "w": 0.7, "i0": 1, "i1": 0, "i2": 1, "i3": 1},
         {"id": 10, "stratum": "S2", "psu": "P4", "w": 1.2, "i0": 0, "i1": 1, "i2": 0, "i3": 1},
         {"id": 11, "stratum": "S2", "psu": "P4", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
         {"id": 12, "stratum": "S2", "psu": "P4", "w": 0.9, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
@@ -368,33 +534,177 @@ def generate_overlap(seed: int = DEFAULT_SEED) -> dict[str, pl.DataFrame]:
     """Generate panel and overlapping samples."""
     # Perfect panel (4 households across 2 waves)
     rows_perf_t0 = [
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h1", "i0": 1, "i1": 1, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h2", "i0": 1, "i1": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h3", "i0": 0, "i1": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h4", "i0": 0, "i1": 1, "w": 1.0},
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "i0": 1,
+            "i1": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "i0": 1,
+            "i1": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "i0": 0,
+            "i1": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "i0": 0,
+            "i1": 1,
+            "w": 1.0,
+        },
     ]
     rows_perf_t1 = [
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h1", "i0": 1, "i1": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h2", "i0": 1, "i1": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h3", "i0": 0, "i1": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h4", "i0": 0, "i1": 0, "w": 1.0},
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "i0": 1,
+            "i1": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "i0": 1,
+            "i1": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "i0": 0,
+            "i1": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "i0": 0,
+            "i1": 0,
+            "w": 1.0,
+        },
     ]
     df_perf = pl.DataFrame(rows_perf_t0 + rows_perf_t1)
 
     # Partial overlap panel (7 households across 2 waves)
     rows_part_t0 = [
-        {"wave": "t0", "stratum": "S1", "cluster": "P1", "hhid": "h1", "i0": 1, "i1": 1, "w": 1.2},
-        {"wave": "t0", "stratum": "S1", "cluster": "P1", "hhid": "h2", "i0": 0, "i1": 1, "w": 0.8},
-        {"wave": "t0", "stratum": "S1", "cluster": "P2", "hhid": "h3", "i0": 1, "i1": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "S2", "cluster": "P3", "hhid": "h5", "i0": 0, "i1": 0, "w": 1.1},
-        {"wave": "t0", "stratum": "S2", "cluster": "P4", "hhid": "h6", "i0": 1, "i1": 1, "w": 0.9},
+        {
+            "wave": "t0",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h1",
+            "i0": 1,
+            "i1": 1,
+            "w": 1.2,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h2",
+            "i0": 0,
+            "i1": 1,
+            "w": 0.8,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S1",
+            "cluster": "P2",
+            "hhid": "h3",
+            "i0": 1,
+            "i1": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S2",
+            "cluster": "P3",
+            "hhid": "h5",
+            "i0": 0,
+            "i1": 0,
+            "w": 1.1,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S2",
+            "cluster": "P4",
+            "hhid": "h6",
+            "i0": 1,
+            "i1": 1,
+            "w": 0.9,
+        },
     ]
     rows_part_t1 = [
-        {"wave": "t1", "stratum": "S1", "cluster": "P1", "hhid": "h1", "i0": 1, "i1": 0, "w": 1.2},
-        {"wave": "t1", "stratum": "S1", "cluster": "P1", "hhid": "h2", "i0": 1, "i1": 1, "w": 0.8},
-        {"wave": "t1", "stratum": "S1", "cluster": "P2", "hhid": "h4", "i0": 0, "i1": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "S2", "cluster": "P3", "hhid": "h5", "i0": 0, "i1": 1, "w": 1.1},
-        {"wave": "t1", "stratum": "S2", "cluster": "P4", "hhid": "h7", "i0": 0, "i1": 0, "w": 0.9},
+        {
+            "wave": "t1",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h1",
+            "i0": 1,
+            "i1": 0,
+            "w": 1.2,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h2",
+            "i0": 1,
+            "i1": 1,
+            "w": 0.8,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S1",
+            "cluster": "P2",
+            "hhid": "h4",
+            "i0": 0,
+            "i1": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S2",
+            "cluster": "P3",
+            "hhid": "h5",
+            "i0": 0,
+            "i1": 1,
+            "w": 1.1,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S2",
+            "cluster": "P4",
+            "hhid": "h7",
+            "i0": 0,
+            "i1": 0,
+            "w": 0.9,
+        },
     ]
     df_part = pl.DataFrame(rows_part_t0 + rows_part_t1)
 
@@ -436,16 +746,17 @@ def export_all_conformity_data(output_dir: str | Path) -> None:
 
     # Replicate designs export
     import json
+
     from afmpi import ReplicateDesign, Specification, estimate
     from afmpi.replicate_estimation import generate_replicate_weights
 
     df_rep = generate_replication()
-    df_rep = df_rep.with_columns(
-        (0.25 * (pl.col("i0") + pl.col("i1") + pl.col("i2") + pl.col("i3"))).alias("c")
-    ).with_columns(
-        (pl.col("c") >= 1/3).cast(pl.Float64).alias("poor")
-    ).with_columns(
-        (pl.col("c") * pl.col("poor")).alias("ck")
+    df_rep = (
+        df_rep.with_columns(
+            (0.25 * (pl.col("i0") + pl.col("i1") + pl.col("i2") + pl.col("i3"))).alias("c")
+        )
+        .with_columns((pl.col("c") >= 1 / 3).cast(pl.Float64).alias("poor"))
+        .with_columns((pl.col("c") * pl.col("poor")).alias("ck"))
     )
 
     spec_rep = Specification({"d": ["i0", "i1", "i2", "i3"]})
@@ -453,14 +764,29 @@ def export_all_conformity_data(output_dir: str | Path) -> None:
         ("JK1", ReplicateDesign(weights="w", psu="psu", method="JK1")),
         ("JKn", ReplicateDesign(weights="w", strata="stratum", psu="psu", method="JKn")),
         ("BRR", ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR")),
-        ("Fay_BRR", ReplicateDesign(weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5)),
-        ("bootstrap", ReplicateDesign(weights="w", strata="stratum", psu="psu", method="bootstrap", seed=42, replicates=20)),
+        (
+            "Fay_BRR",
+            ReplicateDesign(
+                weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5
+            ),
+        ),
+        (
+            "bootstrap",
+            ReplicateDesign(
+                weights="w",
+                strata="stratum",
+                psu="psu",
+                method="bootstrap",
+                seed=42,
+                replicates=20,
+            ),
+        ),
         ("SDR", ReplicateDesign(weights="w", strata="stratum", psu="psu", method="SDR")),
     ]
     rep_meta = {}
     for name, des in rep_methods:
         df_out, rep_cols, scale, rscales = generate_replicate_weights(df_rep, des)
-        res = estimate(df_rep, spec_rep, des, k=1/3)
+        res = estimate(df_rep, spec_rep, des, k=1 / 3)
         se_df = res.se()
         h_se = se_df.filter(pl.col("measure") == "H")["se"].item()
         m0_se = se_df.filter(pl.col("measure") == "M0")["se"].item()
@@ -492,8 +818,8 @@ def export_all_conformity_data(output_dir: str | Path) -> None:
 
 if __name__ == "__main__":
     import sys
+
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
     ref_data_dir = Path(__file__).resolve().parents[2] / "tools" / "reference" / "data"
     export_all_conformity_data(ref_data_dir)
     print(f"Exported all conformity datasets to {ref_data_dir}")
-

@@ -17,7 +17,6 @@ import pandas as pd
 import polars as pl
 import pytest
 
-import afmpi
 from afmpi import Specification, SurveyDesign, estimate
 
 
@@ -76,9 +75,9 @@ def test_1_disjoint_waves_variance_sum():
 
     # Check for M0, H, A
     for measure in ("M0", "H", "A"):
-        abs_row = ch.filter(
-            (pl.col("measure") == measure) & (pl.col("type") == "abs")
-        ).row(0, named=True)
+        abs_row = ch.filter((pl.col("measure") == measure) & (pl.col("type") == "abs")).row(
+            0, named=True
+        )
         se_delta = abs_row["se"]
         var_delta = se_delta**2
 
@@ -108,9 +107,9 @@ def test_2_duration_one_identity():
         abs_row = ch.filter((pl.col("measure") == m) & (pl.col("type") == "abs")).row(
             0, named=True
         )
-        ann_abs_row = ch.filter(
-            (pl.col("measure") == m) & (pl.col("type") == "ann_abs")
-        ).row(0, named=True)
+        ann_abs_row = ch.filter((pl.col("measure") == m) & (pl.col("type") == "ann_abs")).row(
+            0, named=True
+        )
 
         assert abs_row["est"] == ann_abs_row["est"]
         assert abs_row["se"] == ann_abs_row["se"]
@@ -120,9 +119,9 @@ def test_2_duration_one_identity():
         rel_row = ch.filter((pl.col("measure") == m) & (pl.col("type") == "rel")).row(
             0, named=True
         )
-        ann_rel_row = ch.filter(
-            (pl.col("measure") == m) & (pl.col("type") == "ann_rel")
-        ).row(0, named=True)
+        ann_rel_row = ch.filter((pl.col("measure") == m) & (pl.col("type") == "ann_rel")).row(
+            0, named=True
+        )
 
         if rel_row["est"] is None:
             assert ann_rel_row["est"] is None
@@ -158,11 +157,7 @@ def test_3_three_waves_pairs():
     if isinstance(ch, pd.DataFrame):
         ch = pl.from_pandas(ch)
 
-    pairs = (
-        ch.select(pl.col("t0"), pl.col("t1"))
-        .unique(maintain_order=True)
-        .to_dicts()
-    )
+    pairs = ch.select(pl.col("t0"), pl.col("t1")).unique(maintain_order=True).to_dicts()
     pair_tuples = [(p["t0"], p["t1"]) for p in pairs]
 
     assert pair_tuples == [("1", "2"), ("2", "3"), ("1", "3")]
@@ -286,9 +281,9 @@ def test_7_negative_change_interval():
     if isinstance(ch, pd.DataFrame):
         ch = pl.from_pandas(ch)
 
-    abs_row = ch.filter(
-        (pl.col("measure") == "M0") & (pl.col("type") == "abs")
-    ).row(0, named=True)
+    abs_row = ch.filter((pl.col("measure") == "M0") & (pl.col("type") == "abs")).row(
+        0, named=True
+    )
 
     assert abs_row["est"] < 0
     # Lower bound must be strictly negative, not truncated to 0!

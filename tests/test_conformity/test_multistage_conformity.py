@@ -40,8 +40,12 @@ def test_multistage_2stage_fpc_conformity():
     for suffix in ["H", "M0", "A"]:
         val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_fpc")
         row = est_fpc.filter(pl.col("measure") == suffix).row(0, named=True)
-        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_fpc est"
-        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_fpc se"
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+            f"Mismatch in {suffix}_fpc est"
+        )
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+            f"Mismatch in {suffix}_fpc se"
+        )
         assert row["df"] == val["df"], f"Mismatch in {suffix}_fpc df"
 
     # 2. Stage 1 Census
@@ -58,8 +62,12 @@ def test_multistage_2stage_fpc_conformity():
     for suffix in ["H", "M0", "A"]:
         val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_census1")
         row = est_census.filter(pl.col("measure") == suffix).row(0, named=True)
-        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_census1 est"
-        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_census1 se"
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+            f"Mismatch in {suffix}_census1 est"
+        )
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+            f"Mismatch in {suffix}_census1 se"
+        )
         assert row["df"] == val["df"], f"Mismatch in {suffix}_census1 df"
 
 
@@ -68,4 +76,7 @@ def test_multistage_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
     stata_ref = REF_DIR / "multistage_stata.json"
     if not stata_ref.exists():
-        pytest.skip("Stata mpitb reference file multistage_stata.json is not present (PLAN.md §14.10/§14.13)")
+        pytest.skip(
+            "Stata mpitb reference file multistage_stata.json is not present "
+            "(PLAN.md §14.10/§14.13)"
+        )

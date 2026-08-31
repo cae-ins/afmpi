@@ -24,9 +24,6 @@ def generate_census_parquet(
     n_depts = 108
     n_subprefs = 442
 
-    chunk_size = min(n_rows, 1_000_000)
-    n_chunks = (n_rows + chunk_size - 1) // chunk_size
-
     # Prepare schema & data chunks
     data_dict = {}
 
@@ -38,7 +35,9 @@ def generate_census_parquet(
     data_dict["psu"] = (rng.integers(1, n_psus + 1, size=n_rows)).astype(np.int32)
     data_dict["region"] = [f"Reg_{r}" for r in rng.integers(1, n_regions + 1, size=n_rows)]
     data_dict["department"] = [f"Dept_{d}" for d in rng.integers(1, n_depts + 1, size=n_rows)]
-    data_dict["subprefecture"] = [f"SubPref_{s}" for s in rng.integers(1, n_subprefs + 1, size=n_rows)]
+    data_dict["subprefecture"] = [
+        f"SubPref_{s}" for s in rng.integers(1, n_subprefs + 1, size=n_rows)
+    ]
     data_dict["weight"] = rng.uniform(0.8, 1.2, size=n_rows).astype(np.float64)
 
     df = pl.DataFrame(data_dict)

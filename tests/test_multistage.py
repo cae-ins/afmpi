@@ -1,10 +1,9 @@
 """Tests for multi-stage designs and FPC (PLAN.md §14.4a)."""
 
 import pandas as pd
-import polars as pl
 import pytest
 
-from afmpi import Stage, Specification, SurveyDesign, estimate
+from afmpi import Specification, Stage, SurveyDesign, estimate
 
 
 @pytest.fixture
@@ -41,7 +40,9 @@ def spec() -> Specification:
 
 
 def test_multistage_non_regression(sample_data: pd.DataFrame, spec: Specification) -> None:
-    """1. stages=[Stage(id='psu', strata='h')] gives exact same result as SurveyDesign(strata='h', psu='psu')."""
+    """1. stages=[Stage(id='psu', strata='h')] gives exact same result as
+    SurveyDesign(strata='h', psu='psu').
+    """
     d1 = SurveyDesign(weights="weight", strata="strata_1", psu="psu_1")
     d2 = SurveyDesign(weights="weight", stages=[Stage(id="psu_1", strata="strata_1")])
 
@@ -52,7 +53,9 @@ def test_multistage_non_regression(sample_data: pd.DataFrame, spec: Specificatio
 
 
 def test_fpc_fraction_vs_population(sample_data: pd.DataFrame, spec: Specification) -> None:
-    """2. fpc in fraction (<= 1) and fpc in population count (> 1) giving the same f produce same variance."""
+    """2. fpc in fraction (<= 1) and fpc in population count (> 1) giving the
+    same f produce same variance.
+    """
     d_frac = SurveyDesign(
         weights="weight",
         stages=[Stage(id="psu_1", strata="strata_1", fpc="fpc_1_frac")],
@@ -91,14 +94,86 @@ def test_hand_calculated_2stage_example(spec: Specification) -> None:
     """4. Hand-calculated 2-stage example with exact numeric oracle assertions."""
     df = pd.DataFrame(
         [
-            {"h": "H1", "psu": "P1_1", "ssu": "S1_1_1", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 1, "ind2": 1},
-            {"h": "H1", "psu": "P1_1", "ssu": "S1_1_2", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 1, "ind2": 0},
-            {"h": "H1", "psu": "P1_2", "ssu": "S1_2_1", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 0, "ind2": 0},
-            {"h": "H1", "psu": "P1_2", "ssu": "S1_2_2", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 0, "ind2": 0},
-            {"h": "H2", "psu": "P2_1", "ssu": "S2_1_1", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 1, "ind2": 1},
-            {"h": "H2", "psu": "P2_1", "ssu": "S2_1_2", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 1, "ind2": 1},
-            {"h": "H2", "psu": "P2_2", "ssu": "S2_2_1", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 0, "ind2": 1},
-            {"h": "H2", "psu": "P2_2", "ssu": "S2_2_2", "f1": 0.5, "f2": 0.25, "w": 1.0, "ind1": 0, "ind2": 1},
+            {
+                "h": "H1",
+                "psu": "P1_1",
+                "ssu": "S1_1_1",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 1,
+                "ind2": 1,
+            },
+            {
+                "h": "H1",
+                "psu": "P1_1",
+                "ssu": "S1_1_2",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 1,
+                "ind2": 0,
+            },
+            {
+                "h": "H1",
+                "psu": "P1_2",
+                "ssu": "S1_2_1",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 0,
+                "ind2": 0,
+            },
+            {
+                "h": "H1",
+                "psu": "P1_2",
+                "ssu": "S1_2_2",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 0,
+                "ind2": 0,
+            },
+            {
+                "h": "H2",
+                "psu": "P2_1",
+                "ssu": "S2_1_1",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 1,
+                "ind2": 1,
+            },
+            {
+                "h": "H2",
+                "psu": "P2_1",
+                "ssu": "S2_1_2",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 1,
+                "ind2": 1,
+            },
+            {
+                "h": "H2",
+                "psu": "P2_2",
+                "ssu": "S2_2_1",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 0,
+                "ind2": 1,
+            },
+            {
+                "h": "H2",
+                "psu": "P2_2",
+                "ssu": "S2_2_2",
+                "f1": 0.5,
+                "f2": 0.25,
+                "w": 1.0,
+                "ind1": 0,
+                "ind2": 1,
+            },
         ]
     )
 
@@ -131,10 +206,46 @@ def test_f1_equals_1_only_stage2_contributes(spec: Specification) -> None:
     """5. f_1 = 1: only stage 2 contributes to variance with exact oracle values."""
     df = pd.DataFrame(
         [
-            {"h": "H1", "psu": "P1_1", "ssu": "S1_1_1", "f1": 1.0, "f2": 0.5, "w": 1.0, "ind1": 1, "ind2": 1},
-            {"h": "H1", "psu": "P1_1", "ssu": "S1_1_2", "f1": 1.0, "f2": 0.5, "w": 1.0, "ind1": 0, "ind2": 0},
-            {"h": "H1", "psu": "P1_2", "ssu": "S1_2_1", "f1": 1.0, "f2": 0.5, "w": 1.0, "ind1": 1, "ind2": 0},
-            {"h": "H1", "psu": "P1_2", "ssu": "S1_2_2", "f1": 1.0, "f2": 0.5, "w": 1.0, "ind1": 0, "ind2": 1},
+            {
+                "h": "H1",
+                "psu": "P1_1",
+                "ssu": "S1_1_1",
+                "f1": 1.0,
+                "f2": 0.5,
+                "w": 1.0,
+                "ind1": 1,
+                "ind2": 1,
+            },
+            {
+                "h": "H1",
+                "psu": "P1_1",
+                "ssu": "S1_1_2",
+                "f1": 1.0,
+                "f2": 0.5,
+                "w": 1.0,
+                "ind1": 0,
+                "ind2": 0,
+            },
+            {
+                "h": "H1",
+                "psu": "P1_2",
+                "ssu": "S1_2_1",
+                "f1": 1.0,
+                "f2": 0.5,
+                "w": 1.0,
+                "ind1": 1,
+                "ind2": 0,
+            },
+            {
+                "h": "H1",
+                "psu": "P1_2",
+                "ssu": "S1_2_2",
+                "f1": 1.0,
+                "f2": 0.5,
+                "w": 1.0,
+                "ind1": 0,
+                "ind2": 1,
+            },
         ]
     )
     d = SurveyDesign(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
 import pandas as pd
 import polars as pl
 
@@ -13,19 +14,19 @@ class PPSDesign:
 
     method: str = "with_replacement"  # "with_replacement" | "without_replacement"
     inclusion_probability: str | None = None
-    joint_probability: pl.DataFrame | pd.DataFrame | None = field(
-        default=None, compare=False
-    )
+    joint_probability: pl.DataFrame | pd.DataFrame | None = field(default=None, compare=False)
     variance: str = "auto"  # "auto" | "hajek" | "sen_yates_grundy"
 
     def __post_init__(self) -> None:
         if self.method not in ("with_replacement", "without_replacement"):
             raise ValueError(
-                f"method must be 'with_replacement' or 'without_replacement'; got {self.method!r}"
+                f"method must be 'with_replacement' or 'without_replacement'; "
+                f"got {self.method!r}"
             )
         if self.variance not in ("auto", "hajek", "sen_yates_grundy"):
             raise ValueError(
-                f"variance must be 'auto', 'hajek', or 'sen_yates_grundy'; got {self.variance!r}"
+                f"variance must be 'auto', 'hajek', or 'sen_yates_grundy'; "
+                f"got {self.variance!r}"
             )
         if self.method == "without_replacement" and self.inclusion_probability is None:
             raise ValueError(
@@ -104,11 +105,17 @@ def normalize_joint_probability(
         row = conflicts.row(0, named=True)
         strat_info = f" in stratum {row['stratum']!r}" if has_stratum else ""
         raise ValueError(
-            f"conflicting joint inclusion probabilities for pair ({row['__a']!r}, {row['__b']!r}){strat_info}"
+            f"conflicting joint inclusion probabilities for pair "
+            f"({row['__a']!r}, {row['__b']!r}){strat_info}"
         )
 
     out_cols = (
-        [pl.col("stratum"), pl.col("__a").alias("psu_a"), pl.col("__b").alias("psu_b"), pl.col("pi_ab")]
+        [
+            pl.col("stratum"),
+            pl.col("__a").alias("psu_a"),
+            pl.col("__b").alias("psu_b"),
+            pl.col("pi_ab"),
+        ]
         if has_stratum
         else [pl.col("__a").alias("psu_a"), pl.col("__b").alias("psu_b"), pl.col("pi_ab")]
     )

@@ -44,10 +44,7 @@ def sample(seed=101, rows=300):
     generator = random.Random(seed)
     frame = pl.DataFrame(
         {
-            **{
-                f"i{j}": [generator.randint(0, 1) for _ in range(rows)]
-                for j in range(4)
-            },
+            **{f"i{j}": [generator.randint(0, 1) for _ in range(rows)] for j in range(4)},
             "w": [round(generator.uniform(0.4, 3.0), 4) for _ in range(rows)],
             "size": [generator.randint(1, 9) for _ in range(rows)],
             "psu": [generator.randint(1, 30) for _ in range(rows)],
@@ -67,7 +64,7 @@ def measure_inputs(frame, spec, k):
         for row in range(frame.height)
     ]
     poor = [1.0 if value >= k else 0.0 for value in scores]
-    censored = [value * flag for value, flag in zip(scores, poor)]
+    censored = [value * flag for value, flag in zip(scores, poor, strict=True)]
     n = [frame["w"][row] * frame["size"][row] for row in range(frame.height)]
     return {
         "H": (poor, [1.0] * frame.height, n),
@@ -83,14 +80,14 @@ def reference_se(y, x, n, strata, clusters):
     ``sqrt(m / (m - 1) * sum_c u_c^2)``, since the influence values sum to zero.
     """
 
-    denominator = sum(a * b for a, b in zip(n, x))
-    ratio = sum(a * b for a, b in zip(n, y)) / denominator
+    denominator = sum(a * b for a, b in zip(n, x, strict=True))
+    ratio = sum(a * b for a, b in zip(n, y, strict=True)) / denominator
     cells: dict[tuple, float] = {}
     for index in range(len(y)):
         key = (strata[index], clusters[index])
-        cells[key] = cells.get(key, 0.0) + n[index] * (
-            y[index] - ratio * x[index]
-        ) / denominator
+        cells[key] = (
+            cells.get(key, 0.0) + n[index] * (y[index] - ratio * x[index]) / denominator
+        )
 
     variance = 0.0
     for stratum in {key[0] for key in cells}:
@@ -129,9 +126,7 @@ def test_stratified_standard_error_matches_the_stratified_formula(measure):
     result = estimate(frame, spec, design, k=0.4)
 
     y, x, n = measure_inputs(frame, spec, 0.4)[measure]
-    expected = reference_se(
-        y, x, n, frame["stratum"].to_list(), frame["psu"].to_list()
-    )
+    expected = reference_se(y, x, n, frame["stratum"].to_list(), frame["psu"].to_list())
     assert se_of(result, measure) == pytest.approx(expected, rel=1e-12)
 
 

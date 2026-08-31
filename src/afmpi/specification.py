@@ -200,4 +200,3 @@ class Specification:
         raise TypeError(
             f"missing_policy must be a string policy name or a callable; got {type(policy)}"
         )
-

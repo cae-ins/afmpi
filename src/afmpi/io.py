@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import re
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import polars as pl
@@ -38,7 +39,7 @@ def to_parquet(
     """Export estimation results or data frames to Parquet format."""
 
     dest = Path(path)
-    if hasattr(frame, "estimates") and callable(getattr(frame, "estimates")):
+    if hasattr(frame, "estimates") and callable(frame.estimates):
         frame = frame.estimates()
 
     if isinstance(frame, pl.LazyFrame):
@@ -48,14 +49,16 @@ def to_parquet(
     elif isinstance(frame, pd.DataFrame):
         pl.from_pandas(frame).write_parquet(dest, compression=compression)
     else:
-        raise TypeError("frame must be a EstimationResult, Polars DataFrame/LazyFrame, or Pandas DataFrame")
+        raise TypeError(
+            "frame must be a EstimationResult, Polars DataFrame/LazyFrame, or Pandas DataFrame"
+        )
 
 
 def to_stata(frame: object, path: str | Path) -> None:
     """Export estimation results or data frames to Stata .dta format via Pandas."""
 
     dest = Path(path)
-    if hasattr(frame, "estimates") and callable(getattr(frame, "estimates")):
+    if hasattr(frame, "estimates") and callable(frame.estimates):
         frame = frame.estimates()
 
     if isinstance(frame, pl.LazyFrame):
@@ -65,7 +68,9 @@ def to_stata(frame: object, path: str | Path) -> None:
     elif isinstance(frame, pd.DataFrame):
         df_pd = frame
     else:
-        raise TypeError("frame must be a EstimationResult, Polars DataFrame/LazyFrame, or Pandas DataFrame")
+        raise TypeError(
+            "frame must be a EstimationResult, Polars DataFrame/LazyFrame, or Pandas DataFrame"
+        )
 
     df_pd.to_stata(dest, write_index=False)
 

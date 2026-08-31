@@ -1,6 +1,7 @@
 """Tests for variance-covariance matrix calculation (PLAN.md §14.7)."""
 
-from math import isnan, sqrt
+from math import sqrt
+
 import numpy as np
 import polars as pl
 import pytest
@@ -30,15 +31,17 @@ class DummyCensusDesign(Design):
 
 @pytest.fixture
 def sample_data():
-    return pl.DataFrame({
-        "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
-        "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
-        "weight": [1.0, 1.0, 1.2, 1.2, 0.8, 0.8, 1.1, 1.1],
-        "region": ["A", "A", "B", "B", "A", "A", "B", "B"],
-        "d1_i1": [1, 0, 1, 1, 0, 0, 1, 0],
-        "d1_i2": [0, 1, 1, 0, 1, 0, 0, 1],
-        "d2_i3": [1, 1, 0, 1, 0, 1, 1, 0],
-    })
+    return pl.DataFrame(
+        {
+            "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
+            "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
+            "weight": [1.0, 1.0, 1.2, 1.2, 0.8, 0.8, 1.1, 1.1],
+            "region": ["A", "A", "B", "B", "A", "A", "B", "B"],
+            "d1_i1": [1, 0, 1, 1, 0, 0, 1, 0],
+            "d1_i2": [0, 1, 1, 0, 1, 0, 0, 1],
+            "d2_i3": [1, 1, 0, 1, 0, 1, 1, 0],
+        }
+    )
 
 
 @pytest.fixture
@@ -51,12 +54,18 @@ def spec():
 def test_diag_vcov_equals_se_squared_taylor(sample_data, spec):
     """Test 1a: diag(vcov()) == se()**2 EXACTLY for Taylor design."""
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    res = estimate(sample_data, spec, design, k=1/3)
+    res = estimate(sample_data, spec, design, k=1 / 3)
 
     vcov_table = res.vcov(measures=("H", "A", "M0"))
     estimates_table = res.estimates().filter(pl.col("measure").is_in(["H", "A", "M0"]))
 
-    se_map = dict(zip(estimates_table["measure"].to_list(), estimates_table["se"].to_list()))
+    se_map = dict(
+        zip(
+            estimates_table["measure"].to_list(),
+            estimates_table["se"].to_list(),
+            strict=True,
+        )
+    )
 
     for row in vcov_table.to_dicts():
         term = row["term"]
@@ -69,12 +78,18 @@ def test_diag_vcov_equals_se_squared_taylor(sample_data, spec):
 def test_diag_vcov_equals_se_squared_replication(sample_data, spec):
     """Test 1b: diag(vcov()) == se()**2 EXACTLY for Replication design."""
     design = ReplicateDesign(strata="stratum", psu="psu", weights="weight", method="JKn")
-    res = estimate(sample_data, spec, design, k=1/3)
+    res = estimate(sample_data, spec, design, k=1 / 3)
 
     vcov_table = res.vcov(measures=("H", "A", "M0"))
     estimates_table = res.estimates().filter(pl.col("measure").is_in(["H", "A", "M0"]))
 
-    se_map = dict(zip(estimates_table["measure"].to_list(), estimates_table["se"].to_list()))
+    se_map = dict(
+        zip(
+            estimates_table["measure"].to_list(),
+            estimates_table["se"].to_list(),
+            strict=True,
+        )
+    )
 
     for row in vcov_table.to_dicts():
         term = row["term"]
@@ -86,7 +101,7 @@ def test_diag_vcov_equals_se_squared_replication(sample_data, spec):
 def test_diag_vcov_equals_se_squared_census(sample_data, spec):
     """Test 1c: diag(vcov()) == 0 for Census design."""
     design = DummyCensusDesign()
-    res = estimate(sample_data, spec, design, k=1/3)
+    res = estimate(sample_data, spec, design, k=1 / 3)
 
     vcov_table = res.vcov(measures=("H", "A", "M0"))
     for row in vcov_table.to_dicts():
@@ -97,7 +112,7 @@ def test_diag_vcov_equals_se_squared_census(sample_data, spec):
 def test_vcov_symmetric_and_positive_semidefinite(sample_data, spec):
     """Test 2: V is symmetric and positive semi-definite (eigenvalues >= -1e-12)."""
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    res = estimate(sample_data, spec, design, k=1/3)
+    res = estimate(sample_data, spec, design, k=1 / 3)
 
     measures = ("H", "A", "M0", "hd::d1_i1", "actb_dim::d1")
     vcov_df = res.vcov(measures=measures)
@@ -117,7 +132,7 @@ def test_vcov_symmetric_and_positive_semidefinite(sample_data, spec):
 def test_multiple_cutoffs_requires_k(sample_data, spec):
     """Test 3: Multiple cutoffs estimated -> k=None raises ValueError listing cutoffs."""
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    res = estimate(sample_data, spec, design, k=[1/3, 0.5])
+    res = estimate(sample_data, spec, design, k=[1 / 3, 0.5])
 
     with pytest.raises(ValueError, match="multiple cutoffs estimated"):
         res.vcov()
@@ -130,7 +145,7 @@ def test_multiple_cutoffs_requires_k(sample_data, spec):
 def test_custom_measures_selection(sample_data, spec):
     """Test 4: Default measures vs custom measures sequence."""
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    res = estimate(sample_data, spec, design, k=1/3)
+    res = estimate(sample_data, spec, design, k=1 / 3)
 
     # Default
     default_df = res.vcov()
@@ -146,7 +161,7 @@ def test_custom_measures_selection(sample_data, spec):
 def test_subgroup_vcov_context(sample_data, spec):
     """Test 6: Subgroup VCOV context."""
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    res = estimate(sample_data, spec, design, k=1/3, over="region")
+    res = estimate(sample_data, spec, design, k=1 / 3, over="region")
 
     sub_vcov = res.vcov(over="region", subgroup="A", measures=("H", "A", "M0"))
     assert sub_vcov.height == 3
@@ -185,4 +200,3 @@ def test_vcov_oracle_r_survey_validation():
 
     assert v_aa == pytest.approx(0.0703125, abs=1e-12)
     assert v_bb == pytest.approx(0.0703125, abs=1e-12)
-

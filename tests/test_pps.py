@@ -1,7 +1,6 @@
 """Tests for PPS (unequal probability sampling) design (PLAN.md §14.4b)."""
 
 import pandas as pd
-import polars as pl
 import pytest
 
 from afmpi import PPSDesign, Specification, Stage, SurveyDesign, estimate
@@ -31,7 +30,9 @@ def spec() -> Specification:
     )
 
 
-def test_pps_with_replacement_identical_to_v020(pps_data: pd.DataFrame, spec: Specification) -> None:
+def test_pps_with_replacement_identical_to_v020(
+    pps_data: pd.DataFrame, spec: Specification
+) -> None:
     """1. with_replacement produces exact same result as v0.2.0 without pps=."""
     d1 = SurveyDesign(weights="w", strata="h", psu="psu")
     d2 = SurveyDesign(
@@ -160,7 +161,9 @@ def test_hajek_reproduces_stratified_estimator(spec: Specification) -> None:
     assert a_row["se"] == pytest.approx(0.07856742013183863, abs=1e-10)
 
 
-def test_pps_with_replacement_hansen_hurwitz_proof(pps_data: pd.DataFrame, spec: Specification) -> None:
+def test_pps_with_replacement_hansen_hurwitz_proof(
+    pps_data: pd.DataFrame, spec: Specification
+) -> None:
     """5. Proof that PPS with replacement equals Hansen-Hurwitz variance estimator."""
     d_pps = SurveyDesign(
         weights="w",

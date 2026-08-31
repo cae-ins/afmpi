@@ -15,7 +15,7 @@ REF_DIR = Path(__file__).resolve().parent / "reference"
 
 
 def test_pps_conformity():
-    """Verify PPS with replacement, Sen-Yates-Grundy, and Hajek designs against R survey reference."""
+    """Verify PPS with replacement, Sen-Yates-Grundy, and Hajek against R reference."""
     ref_file = REF_DIR / "pps.json"
     assert ref_file.exists(), f"Reference file {ref_file} missing"
 
@@ -39,8 +39,12 @@ def test_pps_conformity():
     for suffix in ["H", "M0", "A"]:
         val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_wr")
         row = est_wr.filter(pl.col("measure") == suffix).row(0, named=True)
-        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_wr est"
-        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_wr se"
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+            f"Mismatch in {suffix}_wr est"
+        )
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+            f"Mismatch in {suffix}_wr se"
+        )
         assert row["df"] == val["df"], f"Mismatch in {suffix}_wr df"
 
     # 2. Sen-Yates-Grundy (SYG) with Joint Inclusion Probabilities
@@ -61,8 +65,12 @@ def test_pps_conformity():
     for suffix in ["H", "M0", "A"]:
         val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_syg")
         row = est_syg.filter(pl.col("measure") == suffix).row(0, named=True)
-        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_syg est"
-        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_syg se"
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+            f"Mismatch in {suffix}_syg est"
+        )
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+            f"Mismatch in {suffix}_syg se"
+        )
         assert row["df"] == val["df"], f"Mismatch in {suffix}_syg df"
 
     # 3. Hajek exact formula
@@ -70,7 +78,9 @@ def test_pps_conformity():
         weights="w",
         strata="stratum",
         psu="psu",
-        pps=PPSDesign(method="without_replacement", inclusion_probability="pi", variance="hajek"),
+        pps=PPSDesign(
+            method="without_replacement", inclusion_probability="pi", variance="hajek"
+        ),
     )
     res_hajek = estimate(df_pps, spec, des_hajek, k=0.5)
     est_hajek = res_hajek.estimates()
@@ -78,8 +88,12 @@ def test_pps_conformity():
     for suffix in ["H", "M0", "A"]:
         val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_hajek")
         row = est_hajek.filter(pl.col("measure") == suffix).row(0, named=True)
-        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_hajek est"
-        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_hajek se"
+        assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+            f"Mismatch in {suffix}_hajek est"
+        )
+        assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+            f"Mismatch in {suffix}_hajek se"
+        )
         assert row["df"] == val["df"], f"Mismatch in {suffix}_hajek df"
 
 
@@ -88,4 +102,7 @@ def test_pps_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
     stata_ref = REF_DIR / "pps_stata.json"
     if not stata_ref.exists():
-        pytest.skip("Stata mpitb reference file pps_stata.json is not present (PLAN.md §14.10/§14.13)")
+        pytest.skip(
+            "Stata mpitb reference file pps_stata.json is not present "
+            "(PLAN.md §14.10/§14.13)"
+        )

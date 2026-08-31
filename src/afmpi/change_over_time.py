@@ -28,17 +28,17 @@ Confidence intervals for change estimates:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from math import isfinite, nan
 from typing import TYPE_CHECKING
-import warnings
 
 import polars as pl
 
-from . import deprivation, domain as domain_module, estimands as estimands_module
-from . import linearization
+from . import deprivation, linearization
+from . import domain as domain_module
+from . import estimands as estimands_module
 from .deprivation import DeprivationMatrix
-from .design_base import Design
 from .replicate_design import ReplicateDesign
 from .replicate_estimation import (
     generate_replicate_weights,
@@ -46,7 +46,6 @@ from .replicate_estimation import (
     replicate_variance,
     replicate_weight_expressions,
 )
-from .survey_design import SurveyDesign
 from .variance import (
     DesignDegrees,
     confidence_interval,
@@ -56,7 +55,7 @@ from .variance import (
 )
 
 if TYPE_CHECKING:
-    from .estimation import _stage_group_columns
+    pass
 
 _CHANGES_SCHEMA = {
     "measure": pl.String,
@@ -97,9 +96,7 @@ def validate_time_variables(
         raise ValueError(f"tvar column {tvar!r} contains missing values")
 
     waves = (
-        frame.select(pl.col(tvar).unique().cast(pl.String).alias("wave"))
-        .to_series()
-        .to_list()
+        frame.select(pl.col(tvar).unique().cast(pl.String).alias("wave")).to_series().to_list()
     )
     if len(waves) < 2:
         raise ValueError(f"tvar must contain at least 2 distinct values; got {len(waves)}")
@@ -108,10 +105,14 @@ def validate_time_variables(
         if cot_year not in frame.columns:
             raise ValueError(f"cot_year column {cot_year!r} is absent from df")
 
-        non_const = frame.group_by(tvar).agg(
-            pl.col(cot_year).n_unique().alias("n_years"),
-            pl.col(cot_year).is_null().any().alias("has_null"),
-        ).filter((pl.col("n_years") > 1) | pl.col("has_null"))
+        non_const = (
+            frame.group_by(tvar)
+            .agg(
+                pl.col(cot_year).n_unique().alias("n_years"),
+                pl.col(cot_year).is_null().any().alias("has_null"),
+            )
+            .filter((pl.col("n_years") > 1) | pl.col("has_null"))
+        )
 
         if non_const.height > 0:
             raise ValueError(
@@ -164,7 +165,9 @@ def compute_changes(
     """Compute absolute, relative and annualised changes between waves."""
 
     if overlap not in {"auto", "independent", "panel"}:
-        raise ValueError(f"overlap must be one of {{'auto', 'independent', 'panel'}}; got {overlap!r}")
+        raise ValueError(
+            f"overlap must be one of {{'auto', 'independent', 'panel'}}; got {overlap!r}"
+        )
 
     frame = matrix.frame
     spec = matrix.spec
@@ -184,7 +187,11 @@ def compute_changes(
     pairs = get_wave_pairs(raw_waves)
 
     # Overlap detection logic
-    psu_col = deprivation.psu_column(1) if deprivation.psu_column(1) in frame.columns else (deprivation.PSU if deprivation.PSU in frame.columns else None)
+    psu_col = (
+        deprivation.psu_column(1)
+        if deprivation.psu_column(1) in frame.columns
+        else (deprivation.PSU if deprivation.PSU in frame.columns else None)
+    )
     has_psu_overlap = False
     n_shared_psus = 0
     if psu_col:
@@ -223,7 +230,9 @@ def compute_changes(
 
     if panel_id is not None and has_panel_overlap and not has_psu_overlap:
         warnings.warn(
-            "panel_id was provided and contains units shared across waves, but no PSU key is shared between waves. Cluster identifiers are not comparable between waves and covariance will be underestimated.",
+            "panel_id was provided and contains units shared across waves, but no PSU "
+            "key is shared between waves. Cluster identifiers are not comparable "
+            "between waves and covariance will be underestimated.",
             category=UserWarning,
             stacklevel=2,
         )
@@ -241,7 +250,9 @@ def compute_changes(
                         or w_fr.select(pl.col(rw_c).is_null().any()).item()
                         or w_fr.select((pl.col(rw_c) == 0.0).all()).item()
                     ):
-                        raise ValueError("Replicate design weights or configuration diverge between waves")
+                        raise ValueError(
+                            "Replicate design weights or configuration diverge between waves"
+                        )
 
     time_diag_rows: list[dict[str, str]] = []
     if active_regime == "panel":
@@ -250,37 +261,50 @@ def compute_changes(
             details_parts.append(f"{n_shared_psus} shared PSUs")
         if has_panel_overlap:
             rate = (n_shared_units / total_units * 100.0) if total_units > 0 else 0.0
-            details_parts.append(f"{n_shared_units} shared units on panel_id (matching rate: {rate:.1f}%)")
+            details_parts.append(
+                f"{n_shared_units} shared units on panel_id (matching rate: {rate:.1f}%)"
+            )
         detail_str = f"overlap detected ({', '.join(details_parts)}); panel regime retained"
-        time_diag_rows.append({
-            "topic": "time",
-            "context": f"tvar='{tvar}'",
-            "decision": "panel",
-            "detail": detail_str,
-        })
+        time_diag_rows.append(
+            {
+                "topic": "time",
+                "context": f"tvar='{tvar}'",
+                "decision": "panel",
+                "detail": detail_str,
+            }
+        )
     elif overlap == "independent" and overlap_detected:
         details_parts = []
         if has_psu_overlap:
             details_parts.append(f"{n_shared_psus} shared PSUs")
         if has_panel_overlap:
             details_parts.append(f"{n_shared_units} shared units on panel_id")
-        detail_str = f"overlap detected ({', '.join(details_parts)}) but deliberately ignored (overlap='independent'); forced independent regime"
-        time_diag_rows.append({
-            "topic": "time",
-            "context": f"tvar='{tvar}'",
-            "decision": "independent",
-            "detail": detail_str,
-        })
+        detail_str = (
+            f"overlap detected ({', '.join(details_parts)}) but deliberately ignored "
+            f"(overlap='independent'); forced independent regime"
+        )
+        time_diag_rows.append(
+            {
+                "topic": "time",
+                "context": f"tvar='{tvar}'",
+                "decision": "independent",
+                "detail": detail_str,
+            }
+        )
     else:
-        time_diag_rows.append({
-            "topic": "time",
-            "context": f"tvar='{tvar}'",
-            "decision": "independent",
-            "detail": "no unit shared between waves; independent regime retained",
-        })
+        time_diag_rows.append(
+            {
+                "topic": "time",
+                "context": f"tvar='{tvar}'",
+                "decision": "independent",
+                "detail": "no unit shared between waves; independent regime retained",
+            }
+        )
 
     if overlap == "independent" and overlap_detected:
-        prefix_cols = list(dict.fromkeys(c for c in (psu_col, deprivation.PSU) if c and c in frame.columns))
+        prefix_cols = list(
+            dict.fromkeys(c for c in (psu_col, deprivation.PSU) if c and c in frame.columns)
+        )
         prefix_exprs = [
             (pl.col(tvar).cast(pl.String) + pl.lit("__") + pl.col(c).cast(pl.String)).alias(c)
             for c in prefix_cols
@@ -366,12 +390,15 @@ def compute_changes(
                 )
 
                 vars_delta, _ = design_variance(
-                    u_delta_df, keys, full_degrees, design  # type: ignore[arg-type]
+                    u_delta_df,
+                    keys,
+                    full_degrees,
+                    design,  # type: ignore[arg-type]
                 )
                 vars0, _ = design_variance(u0, keys, full_degrees, design)  # type: ignore[arg-type]
                 vars1, _ = design_variance(u1, keys, full_degrees, design)  # type: ignore[arg-type]
 
-                for ratio0, ratio1 in zip(ratios0, ratios1):
+                for ratio0, ratio1 in zip(ratios0, ratios1, strict=True):
                     key = ratio0.key
                     _append_change_rows(
                         rows,
@@ -396,9 +423,7 @@ def compute_changes(
             for variable in variables:
                 subgroups = subgroups_dict[variable]
 
-                sub_ratios: dict[
-                    tuple[str, str], tuple[linearization.RatioTotals, ...]
-                ] = {}
+                sub_ratios: dict[tuple[str, str], tuple[linearization.RatioTotals, ...]] = {}
                 sub_u: dict[tuple[str, str], pl.DataFrame] = {}
 
                 for w in raw_waves:
@@ -411,12 +436,8 @@ def compute_changes(
                             w_sub_frame, estimands, base_weight, group_columns=group_cols
                         )
                         sums_w_sub = _align_simple(cells_w_sub, universe, group_cols)
-                        ratios_w_sub = linearization.totals_from_clusters(
-                            sums_w_sub, estimands
-                        )
-                        u_w_sub = linearization.cluster_influence(
-                            sums_w_sub, ratios_w_sub
-                        )
+                        ratios_w_sub = linearization.totals_from_clusters(sums_w_sub, estimands)
+                        u_w_sub = linearization.cluster_influence(sums_w_sub, ratios_w_sub)
                         sub_ratios[(w, subgroup)] = ratios_w_sub
                         sub_u[(w, subgroup)] = u_w_sub
 
@@ -433,9 +454,7 @@ def compute_changes(
                             r0_pt = next(r for r in ratios0 if r.key == key)
                             r1_pt = next(r for r in ratios1 if r.key == key)
                             if r0_pt.value is None or r1_pt.value is None:
-                                u_delta_exprs.append(
-                                    pl.lit(None, dtype=pl.Float64).alias(key)
-                                )
+                                u_delta_exprs.append(pl.lit(None, dtype=pl.Float64).alias(key))
                             else:
                                 u_delta_exprs.append((pl.col(key) - u0[key]).alias(key))
                         u_delta_df = u1.select(
@@ -444,12 +463,15 @@ def compute_changes(
                         )
 
                         vars_delta, _ = design_variance(
-                            u_delta_df, keys, full_degrees, design  # type: ignore[arg-type]
+                            u_delta_df,
+                            keys,
+                            full_degrees,
+                            design,  # type: ignore[arg-type]
                         )
                         vars0, _ = design_variance(u0, keys, full_degrees, design)  # type: ignore[arg-type]
                         vars1, _ = design_variance(u1, keys, full_degrees, design)  # type: ignore[arg-type]
 
-                        for ratio0, ratio1 in zip(ratios0, ratios1):
+                        for ratio0, ratio1 in zip(ratios0, ratios1, strict=True):
                             key = ratio0.key
                             _append_change_rows(
                                 rows,
@@ -478,9 +500,7 @@ def compute_changes(
                 frame_work, rep_design
             )
             if rep_design.method == "JKn" and rep_design.strata is not None:
-                H = frame_work_rep.select(
-                    pl.col(rep_design.strata).cast(pl.String)
-                ).n_unique()
+                H = frame_work_rep.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
             else:
                 H = 1
             rep_design_active = ReplicateDesign(
@@ -517,15 +537,9 @@ def compute_changes(
             else:  # JKn
                 scale = 1.0
 
-            rscales = (
-                rep_design.rscales
-                if rep_design.rscales is not None
-                else ((1.0,) * R)
-            )
+            rscales = rep_design.rscales if rep_design.rscales is not None else ((1.0,) * R)
             if rep_design.method == "JKn" and rep_design.strata is not None:
-                H = frame_work.select(
-                    pl.col(rep_design.strata).cast(pl.String)
-                ).n_unique()
+                H = frame_work.select(pl.col(rep_design.strata).cast(pl.String)).n_unique()
             else:
                 H = 1
             rep_design_active = ReplicateDesign(
@@ -548,10 +562,7 @@ def compute_changes(
             H
             if (
                 rep_design.method == "JKn"
-                and (
-                    rep_design.strata is not None
-                    or rep_design.replicate_weights is None
-                )
+                and (rep_design.strata is not None or rep_design.replicate_weights is None)
             )
             else 1
         )
@@ -571,9 +582,7 @@ def compute_changes(
             for w in raw_waves:
                 w_frame = frame_work.filter(pl.col(tvar).cast(pl.String) == w)
                 pt_w = linearization.totals(w_frame, estimands, weight=base_weight)
-                reps_w = replicate_totals(
-                    w_frame, estimands, rep_weight_exprs, batch_size=64
-                )
+                reps_w = replicate_totals(w_frame, estimands, rep_weight_exprs, batch_size=64)
                 nat_pt[w] = pt_w
                 nat_reps[w] = reps_w  # type: ignore[assignment]
 
@@ -641,7 +650,7 @@ def compute_changes(
                                 )
                             )
 
-                for ratio0, ratio1 in zip(pt0, pt1):
+                for ratio0, ratio1 in zip(pt0, pt1, strict=True):
                     key = ratio0.key
                     _append_change_rows(
                         rows,
@@ -664,15 +673,12 @@ def compute_changes(
 
             # 2. Subgroup levels
             subgroups_dict = {
-                variable: domain_module.levels(frame_work, variable)
-                for variable in variables
+                variable: domain_module.levels(frame_work, variable) for variable in variables
             }
 
             for variable in variables:
                 subgroups = subgroups_dict[variable]
-                sub_pt: dict[
-                    tuple[str, str], tuple[linearization.RatioTotals, ...]
-                ] = {}
+                sub_pt: dict[tuple[str, str], tuple[linearization.RatioTotals, ...]] = {}
                 sub_reps: dict[
                     tuple[str, str], list[tuple[linearization.RatioTotals, ...]]
                 ] = {}
@@ -761,7 +767,7 @@ def compute_changes(
                                         )
                                     )
 
-                        for ratio0, ratio1 in zip(pt0, pt1):
+                        for ratio0, ratio1 in zip(pt0, pt1, strict=True):
                             key = ratio0.key
                             _append_change_rows(
                                 rows,

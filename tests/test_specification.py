@@ -2,7 +2,6 @@ import pytest
 
 from afmpi import Specification, SurveyDesign
 
-
 DIMENSIONS_05 = {
     "Education": [f"i{n}" for n in range(4)],
     "Sante": [f"i{n}" for n in range(4, 7)],

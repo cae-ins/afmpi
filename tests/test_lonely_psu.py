@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-import polars as pl
 import pytest
 
 from afmpi import LonelyPSUWarning, Specification, SurveyDesign, estimate
@@ -52,7 +51,9 @@ def test_five_policies_on_same_dataset(lonely_data: pd.DataFrame, spec: Specific
         assert m0_row["se"] >= 0
 
 
-def test_fail_emits_warning_and_returns_nan(lonely_data: pd.DataFrame, spec: Specification) -> None:
+def test_fail_emits_warning_and_returns_nan(
+    lonely_data: pd.DataFrame, spec: Specification
+) -> None:
     """2. "fail" returns nan AND emits exactly one LonelyPSUWarning."""
     d = SurveyDesign(weights="w", strata="h", psu="psu", lonely_psu="fail")
     with pytest.warns(LonelyPSUWarning, match="contain\\(s\\) a single PSU"):
@@ -94,7 +95,9 @@ def test_collapse_matches_manual_merge(spec: Specification) -> None:
     )
 
     df_merged = df_2lonely.copy()
-    df_merged["h"] = df_merged["h"].replace({"H2": "__afmpi_collapsed", "H3": "__afmpi_collapsed"})
+    df_merged["h"] = df_merged["h"].replace(
+        {"H2": "__afmpi_collapsed", "H3": "__afmpi_collapsed"}
+    )
 
     d_col = SurveyDesign(weights="w", strata="h", psu="psu", lonely_psu="collapse")
     d_manual = SurveyDesign(weights="w", strata="h", psu="psu")

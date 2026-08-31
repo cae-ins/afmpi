@@ -80,21 +80,23 @@ design = SurveyDesign(
 )
 
 result = estimate(
-    data, spec, design,
-    k=[0.20, 1 / 3, 0.50],   # fractions, pas des pourcentages
+    data,
+    spec,
+    design,
+    k=[0.20, 1 / 3, 0.50],  # fractions, pas des pourcentages
     over=["region", "milieu"],
-    tvar="wave",             # colonne identifiant la vague
-    cot_year="year",         # année civile de la vague (optionnel)
-    ci_method="logit",       # "logit" (défaut), "t" ou "normal"
+    tvar="wave",  # colonne identifiant la vague
+    cot_year="year",  # année civile de la vague (optionnel)
+    ci_method="logit",  # "logit" (défaut), "t" ou "normal"
 )
 
-result.estimates()     # table complète : est, se, lci, uci, cv, df
-result.to_frame()      # H, A, M0 par seuil et par sous-groupe
-result.confint()       # estimations et bornes
-result.degf()          # degrés de liberté par contexte de design
-result.contributions() # H_j, CH_j, actb_j, pctb_j et leurs erreurs-types
-result.decomposition() # contrôle de décomposabilité Σ φˡ·M0ˡ = M0
-result.changes()       # variations brutes, relatives et annualisées entre vagues
+result.estimates()  # table complète : est, se, lci, uci, cv, df
+result.to_frame()  # H, A, M0 par seuil et par sous-groupe
+result.confint()  # estimations et bornes
+result.degf()  # degrés de liberté par contexte de design
+result.contributions()  # H_j, CH_j, actb_j, pctb_j et leurs erreurs-types
+result.decomposition()  # contrôle de décomposabilité Σ φˡ·M0ˡ = M0
+result.changes()  # variations brutes, relatives et annualisées entre vagues
 ```
 
 Chaque variable de `over=` produit sa propre ventilation à une dimension (pas un croisement),
@@ -103,6 +105,16 @@ comme `over = c("area", "region")` dans `mpitb`.
 **Convention des seuils `k`** : `afmpi` attend des **fractions entre 0 et 1** (`1/3`), là où
 `mpitb`/`mpitbR` attendent des pourcentages entiers (`33`). C'est un écart assumé, plus
 idiomatique en Python ; il n'y a pas de conversion implicite.
+
+## Les trois familles de design
+
+`afmpi` supporte trois grandes familles de structures de données et d'échantillonnage :
+
+| Famille | Classe | Quand l'utiliser | Inférence et variance |
+|---|---|---|---|
+| **Sondage complexe** | `SurveyDesign(...)` | Enquêtes par sondage avec strates, grappes (PSU), degrés multiples (`Stage`) ou tirage à probabilités inégales (`PPSDesign`). | Linéarisation de Taylor (fonctions d'influence). |
+| **Poids de réplication** | `ReplicateDesign(...)` | Fichiers d'enquêtes fournissant des poids de réplicats pré-calculés (DHS, ACS, CPS) ou méthodes de rééchantillonnage (`JK1`, `JKn`, `BRR`, `Fay_BRR`, `bootstrap`, `SDR`). | Variance par réplicats ($R$ ré-estimations). |
+| **Recensement / Données exhaustives** | `CensusDesign(...)` | Données de recensement ou registres exhaustifs sans échantillonnage probabiliste. | Données exhaustives : $\text{SE} = 0$, $\text{CV} = 0$, $\text{df} = 0$, bornes d'IC ponctuelles. |
 
 ### Évolution dans le temps : échantillons indépendants (`changes()`)
 
@@ -117,7 +129,7 @@ strates vues par la variance diminue — donc fausse l'erreur-type, même quand 
 ponctuelle reste juste :
 
 ```python
-result.domain("region == 'Abidjan'")   # correct : pondère à zéro hors du domaine
+result.domain("region == 'Abidjan'")  # correct : pondère à zéro hors du domaine
 ```
 
 Les lignes hors du domaine sont conservées avec un poids nul : les strates et les grappes
@@ -140,10 +152,11 @@ l'inférence prend en compte les probabilités d'inclusion de premier et second 
 Hájek, Hansen-Hurwitz).
 
 Cinq politiques de traitement des strates à grappe isolée (*lonely PSUs*) sont supportées :
-`fail` (par défaut, émet un `LonelyPSUWarning` et renvoie `nan` sur le contexte), `certainty`,
-`adjust`, `average`, et `collapse`. Par défaut (`missing_design="error"`), les colonnes de strate,
-de grappe ou de FPC ne doivent pas contenir de valeurs manquantes (rejet explicite avec le nombre
-de lignes concernées).
+`fail` (défaut), `certainty`, `adjust`, `average`, et `collapse`.
+
+**Comportement de `lonely_psu="fail"`** : contrairement au package R `survey` où `options(survey.lonely.psu="fail")` lève une exception interrompant le calcul, `afmpi` ne lève **pas** d'exception. Il émet un avertissement `LonelyPSUWarning` et renvoie `se = NaN` (avec `df = 0`) pour le contexte affecté. Ce choix garantit que les calculs par lots (multi-seuils $k$, multi-$over$) ne sont pas interrompus tout en préservant la traçabilité du problème.
+
+Par défaut (`missing_design="error"`), les colonnes de strate, de grappe ou de FPC ne doivent pas contenir de valeurs manquantes (rejet explicite avec le nombre de lignes concernées).
 
 Sans strate déclarée, la variance se réduit exactement à l'estimateur *ultimate cluster* de
 `PythonIPM`. Sans grappe déclarée, chaque ligne est sa propre grappe (sondage aléatoire simple
@@ -166,10 +179,11 @@ Le tableau ci-dessous illustre la déclaration pour quatre cas d'usage instituti
 
 ## État actuel et roadmap
 
-La version actuelle couvre les **phases 0 à 7** ([`PLAN.md`](PLAN.md) §9, §14, §16-§17) : le
+La version actuelle couvre l'intégralité des **phases 0 à 10** ([`PLAN.md`](PLAN.md)) : le
 noyau (linéarisation Taylor, plans de sondage, domaines), les plans complexes (multi-degrés, PPS,
 grappes isolées), les six méthodes de réplication, l'évolution dans le temps (échantillons
-indépendants et panels/chevauchants), et l'inférence complète (VCOV, tests de Wald) :
+indépendants et panels/chevauchants), l'inférence complète (VCOV, tests de Wald), l'exécution
+à l'échelle (Polars streaming, benchmark 10M lignes), et la suite de conformité statistique intégrale :
 
 - spécification des dimensions et pondérations égales imbriquées ou personnalisées ;
 - politiques de valeurs manquantes configurables : `listwise_deletion` (défaut), `reweighting`, `treat_as_nondeprived` et fonctions personnalisées (`"reweighting"` renormalise pour que `c_i` reste comparable et exclut l'indicateur du dénominateur de `hd`/`hdk` avec `observed=0` ; `"treat_as_nondeprived"` biaise `c_i` vers le bas et garde l'indicateur au dénominateur avec `observed=1`) ;
@@ -270,15 +284,15 @@ comparaison sur le code d'avant la phase 9 (commit `82df770`) sur ce même scén
 phase 9 constitue donc un progrès net, même si le coût fixe par appel reste un point d'attention
 pour un usage à échelle intermédiaire.
 
-**Validation contre `survey` (R 4.5.3)** (`tests/oracle/`) : couvre aujourd'hui le noyau (SRS,
-stratifié simple, domaines) et les plans complexes (multi-degrés/FPC, PPS SYG/Hájek). **Ne couvre
-pas encore** les méthodes de réplication (JK/JKn/BRR/Fay/bootstrap/SDR), les panels, ni VCOV/Wald
-— ces phases ne sont validées qu'en interne pour l'instant (identités algébriques, calculs à la
-main, convergence bootstrap vs Taylor). Étendre l'oracle R à ce périmètre est la prochaine étape
-de rigueur avant la phase 9.
-
-Ne sont pas encore implémentés : la suite de conformité statistique complète du §8.A (phase 10).
-Voir [`PLAN.md`](PLAN.md) pour le phasage détaillé des phases 8 à 12.
+**Validation et conformité statistique contre `survey` (R 4.5.3)** (`tests/test_conformity/`, `tests/oracle/`) :
+Une suite exhaustive de 358 tests vérifie la co-ïncidence numérique contre les oracles R `survey` :
+- Sondage aléatoire simple (SRS) et stratifié simple ;
+- Plans de sondage en grappes et multi-degrés avec correction de population finie (FPC) ;
+- Plans PPS avec remise et sans remise (Sen-Yates-Grundy, Hájek) ;
+- Les six méthodes de réplication (`JK1`, `JKn`, `BRR`, `Fay_BRR`, `bootstrap`, `SDR`) ;
+- Politiques de gestion des grappes isolées (*lonely PSUs*) ;
+- Limites de données (poids extrêmes, politiques de valeurs manquantes) ;
+- Sous-populations et domaines sans rupture de plan.
 
 ## Attribution et licence
 

@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-import polars as pl
 
 from afmpi.hadamard import sylvester
 

@@ -12,7 +12,7 @@ multi-stage, lonely PSU policies, PPS, replicate designs, CensusDesign).
 
 import math
 import random
-from functools import lru_cache
+from functools import cache
 
 import polars as pl
 import pytest
@@ -40,9 +40,7 @@ DESIGNS = {
     # Base survey designs
     "srs": SurveyDesign(weights="w", household_size="size"),
     "clustered": SurveyDesign(weights="w", household_size="size", psu="psu"),
-    "stratified": SurveyDesign(
-        weights="w", household_size="size", strata="stratum", psu="psu"
-    ),
+    "stratified": SurveyDesign(weights="w", household_size="size", strata="stratum", psu="psu"),
     "unweighted": SurveyDesign(psu="psu"),
     # Complex survey designs (Phase 4a - 4c)
     "multistage": SurveyDesign(
@@ -81,10 +79,21 @@ DESIGNS = {
         weights="w", household_size="size", strata="stratum_2psu", psu="psu_2psu", method="BRR"
     ),
     "rep_fay_brr": ReplicateDesign(
-        weights="w", household_size="size", strata="stratum_2psu", psu="psu_2psu", method="Fay_BRR", fay=0.5
+        weights="w",
+        household_size="size",
+        strata="stratum_2psu",
+        psu="psu_2psu",
+        method="Fay_BRR",
+        fay=0.5,
     ),
     "rep_bootstrap": ReplicateDesign(
-        weights="w", household_size="size", strata="stratum", psu="psu", method="bootstrap", replicates=20, seed=42
+        weights="w",
+        household_size="size",
+        strata="stratum",
+        psu="psu",
+        method="bootstrap",
+        replicates=20,
+        seed=42,
     ),
     "rep_sdr": ReplicateDesign(
         weights="w", household_size="size", strata="stratum_2psu", psu="psu_2psu", method="SDR"
@@ -122,7 +131,7 @@ def sample(seed=1234, rows=500):
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def results(name):
     return estimate(
         sample(),
@@ -257,12 +266,10 @@ def test_a_zero_cutoff_makes_everyone_poor_and_A_the_mean_score():
     # M0 collapses onto it too.
     assert result.M0 == pytest.approx(result.A, abs=1e-15)
     scores = result.scores()
-    mean = (
-        scores.select(
-            (pl.col("score") * pl.col("population_weight")).sum()
-            / pl.col("population_weight").sum()
-        ).item()
-    )
+    mean = scores.select(
+        (pl.col("score") * pl.col("population_weight")).sum()
+        / pl.col("population_weight").sum()
+    ).item()
     assert result.A == pytest.approx(mean, abs=1e-12)
 
 
@@ -294,7 +301,6 @@ def test_standard_errors_are_reported_or_openly_missing_never_invented():
             assert row["se"] >= 0 or math.isnan(row["se"]), row
             if math.isnan(row["se"]):
                 assert math.isnan(row["lci"]) and math.isnan(row["uci"]), row
-
 
 
 def test_the_alkire_foster_weights_sum_to_one():

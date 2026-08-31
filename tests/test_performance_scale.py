@@ -7,12 +7,11 @@ import re
 from pathlib import Path
 from unittest.mock import patch
 
-import psutil
 import polars as pl
-from polars.testing import assert_frame_equal
+import psutil
 import pytest
+from polars.testing import assert_frame_equal
 
-import afmpi
 import afmpi.estimation as estimation_module
 from afmpi import (
     CensusDesign,
@@ -122,7 +121,9 @@ def test_parquet_100k_matches_memory(tmp_path: Path, monkeypatch):
     assert len(cache_ids) == 1, f"Expected single shared scan cache, got {len(cache_ids)}"
 
     # Accuracy assertion across all cutoffs and dimensions
-    assert_frame_equal(res_mem.estimates(), res_parquet.estimates(), check_exact=False, atol=1e-10)
+    assert_frame_equal(
+        res_mem.estimates(), res_parquet.estimates(), check_exact=False, atol=1e-10
+    )
 
 
 def test_streaming_retains_no_line_level_matrix(tmp_path: Path, sample_df):
@@ -153,7 +154,9 @@ def test_resources_none_identical_to_default(sample_df):
     res_default = estimate(sample_df, spec, design, k=0.33)
     res_none = estimate(sample_df, spec, design, k=0.33, resources=None)
 
-    assert_frame_equal(res_default.estimates(), res_none.estimates(), check_exact=False, atol=1e-10)
+    assert_frame_equal(
+        res_default.estimates(), res_none.estimates(), check_exact=False, atol=1e-10
+    )
 
 
 def test_execution_config_batch_size(sample_df):
@@ -178,7 +181,9 @@ def test_execution_config_batch_size(sample_df):
             assert call.kwargs.get("batch_size") == 64
 
 
-def test_streaming_single_scan_independent_of_k_and_over(tmp_path: Path, sample_df, monkeypatch):
+def test_streaming_single_scan_independent_of_k_and_over(
+    tmp_path: Path, sample_df, monkeypatch
+):
     """The number of collected Polars plans (and hence physical parquet scans, via
     Polars' common-subplan elimination on the shared upstream plan) must not grow
     with the number of k thresholds -- only with the number of `over` variables."""
@@ -224,6 +229,7 @@ def test_streaming_single_scan_independent_of_k_and_over(tmp_path: Path, sample_
 def test_full_10m_census_benchmark(tmp_path: Path):
     """Full 10,000,000 row census performance benchmark."""
     import time
+
     from benchmarks.generate_census import generate_census_parquet
 
     parquet_path = tmp_path / "census_10m.parquet"
@@ -260,7 +266,8 @@ def test_full_10m_census_benchmark(tmp_path: Path):
     threads_observed = pl.thread_pool_size()
 
     print(
-        f"\n[BENCHMARK RESULT] Time: {t_elapsed:.2f}s | Peak RAM: {peak_ram_gb:.3f} GB | Threads: {threads_observed}"
+        f"\n[BENCHMARK RESULT] Time: {t_elapsed:.2f}s | "
+        f"Peak RAM: {peak_ram_gb:.3f} GB | Threads: {threads_observed}"
     )
 
     assert t_elapsed < 300.0, f"Benchmark elapsed time {t_elapsed:.2f}s exceeded 300s target"

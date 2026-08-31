@@ -10,7 +10,6 @@ import polars as pl
 import pytest
 
 from afmpi import (
-    EstimationResult,
     ReplicateDesign,
     Specification,
     SurveyDesign,
@@ -75,9 +74,7 @@ def test_jkn_variance_matches_taylor_variance(sample_stratified_data: pd.DataFra
     )
 
     taylor_design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    rep_design = ReplicateDesign(
-        method="JKn", strata="stratum", psu="psu", weights="weight"
-    )
+    rep_design = ReplicateDesign(method="JKn", strata="stratum", psu="psu", weights="weight")
 
     res_taylor = estimate(sample_stratified_data, spec, taylor_design, k=0.3)
     res_rep = estimate(sample_stratified_data, spec, rep_design, k=0.3)
@@ -313,9 +310,7 @@ def test_batch_size_invariance(sample_stratified_data: pd.DataFrame):
         weights={"d1": 0.5, "d2": 0.5},
     )
 
-    rep_design = ReplicateDesign(
-        method="JKn", strata="stratum", psu="psu", weights="weight"
-    )
+    rep_design = ReplicateDesign(method="JKn", strata="stratum", psu="psu", weights="weight")
 
     matrix = estimate(sample_stratified_data, spec, rep_design, k=0.3)
 
@@ -352,14 +347,10 @@ def test_over_decomposability_and_scan_count(sample_stratified_data: pd.DataFram
         weights={"d1": 0.5, "d2": 0.5},
     )
 
-    rep_design = ReplicateDesign(
-        method="JKn", strata="stratum", psu="psu", weights="weight"
-    )
+    rep_design = ReplicateDesign(method="JKn", strata="stratum", psu="psu", weights="weight")
 
     with patch("afmpi.estimation.replicate_totals", wraps=replicate_totals) as spy:
-        res = estimate(
-            sample_stratified_data, spec, rep_design, k=0.3, over="region"
-        )
+        res = estimate(sample_stratified_data, spec, rep_design, k=0.3, over="region")
 
         # Decomposability audit must pass
         decomp = res.decomposition()
@@ -395,9 +386,7 @@ def test_jkn_single_psu_stratum_raises_value_error():
         weights={"d1": 0.5, "d2": 0.5},
     )
 
-    rep_design = ReplicateDesign(
-        method="JKn", strata="stratum", psu="psu", weights="weight"
-    )
+    rep_design = ReplicateDesign(method="JKn", strata="stratum", psu="psu", weights="weight")
 
     with pytest.raises(ValueError) as exc_info:
         estimate(data, spec, rep_design, k=0.5)
@@ -500,19 +489,13 @@ def test_fay_brr_fay_0_matches_brr_exactly():
                 )
     df = pl.DataFrame(data)
 
-    rd_brr = ReplicateDesign(
-        weights="weight", strata="strata", psu="psu", method="BRR"
-    )
+    rd_brr = ReplicateDesign(weights="weight", strata="strata", psu="psu", method="BRR")
     rd_fay0 = ReplicateDesign(
         weights="weight", strata="strata", psu="psu", method="Fay_BRR", fay=0.0
     )
 
-    frame_brr, cols_brr, scale_brr, rscales_brr = generate_replicate_weights(
-        df, rd_brr
-    )
-    frame_fay, cols_fay, scale_fay, rscales_fay = generate_replicate_weights(
-        df, rd_fay0
-    )
+    frame_brr, cols_brr, scale_brr, rscales_brr = generate_replicate_weights(df, rd_brr)
+    frame_fay, cols_fay, scale_fay, rscales_fay = generate_replicate_weights(df, rd_fay0)
 
     assert cols_brr == cols_fay
     assert scale_brr == scale_fay
@@ -528,13 +511,13 @@ def test_fay_brr_fay_0_matches_brr_exactly():
 
     assert res_brr.H == res_fay.H
     assert res_brr.M0 == res_fay.M0
-    assert (
-        res_brr.se()["se"].to_list() == res_fay.se()["se"].to_list()
-    )
+    assert res_brr.se()["se"].to_list() == res_fay.se()["se"].to_list()
 
 
 def test_brr_variance_matches_taylor_variance_for_2psu_strata():
-    """Test #5: Sur un plan à H strates x 2 PSU, BRR et la linéarisation donnent la même variance pour M0 à 1e-10."""
+    """Test #5: Sur un plan à H strates x 2 PSU, BRR et la linéarisation
+    donnent la même variance pour M0 à 1e-10.
+    """
     data = []
     for h in range(1, 4):
         for p in (1, 2):
@@ -555,22 +538,29 @@ def test_brr_variance_matches_taylor_variance_for_2psu_strata():
     )
 
     taylor_design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
-    brr_design = ReplicateDesign(
-        method="BRR", strata="stratum", psu="psu", weights="weight"
-    )
+    brr_design = ReplicateDesign(method="BRR", strata="stratum", psu="psu", weights="weight")
 
-    res_taylor = estimate(df, spec, taylor_design, k=0.3)
-    res_brr = estimate(df, spec, brr_design, k=0.3)
+    res_taylor = estimate(df, spec, taylor_design, k=0.5)
+    res_brr = estimate(df, spec, brr_design, k=0.5)
 
-    se_taylor_M0 = res_taylor.se().filter(pl.col("measure") == "M0")["se"].item()
-    se_brr_M0 = res_brr.se().filter(pl.col("measure") == "M0")["se"].item()
+    v_taylor = (res_taylor.se().filter(pl.col("measure") == "M0")["se"].item()) ** 2
+    v_brr = (res_brr.se().filter(pl.col("measure") == "M0")["se"].item()) ** 2
 
-    var_taylor = se_taylor_M0**2
-    var_brr = se_brr_M0**2
-    diff = abs(var_brr - var_taylor)
+    assert v_brr == pytest.approx(v_taylor, abs=1e-10)
 
-    assert diff < 1e-10
 
+def test_brr_fay_validation_rejects_strata_with_more_than_2_psu():
+    data = [
+        {"strata": "S1", "psu": "P1_1", "w": 1.0, "d1": 1},
+        {"strata": "S1", "psu": "P1_2", "w": 1.0, "d1": 0},
+        {"strata": "S2", "psu": "P2_1", "w": 1.0, "d1": 1},
+        {"strata": "S2", "psu": "P2_2", "w": 1.0, "d1": 0},
+        {"strata": "S2", "psu": "P2_3", "w": 1.0, "d1": 1},
+    ]
+    df = pl.DataFrame(data)
+    d = ReplicateDesign(weights="w", strata="strata", psu="psu", method="BRR")
+    with pytest.raises(ValueError, match="exactly 2 PSUs"):
+        generate_replicate_weights(df, d)
 
 @pytest.mark.parametrize("num_psu", [1, 3])
 def test_brr_invalid_psu_count_raises_value_error(num_psu: int):
@@ -578,14 +568,10 @@ def test_brr_invalid_psu_count_raises_value_error(num_psu: int):
     rows = []
     # Stratum S1 has 2 PSUs
     for p in (1, 2):
-        rows.append(
-            {"stratum": "S1", "psu": f"P1_{p}", "w": 1.0, "d1": 1, "d2": 0}
-        )
+        rows.append({"stratum": "S1", "psu": f"P1_{p}", "w": 1.0, "d1": 1, "d2": 0})
     # Stratum S2 has num_psu PSUs (1 or 3)
     for p in range(1, num_psu + 1):
-        rows.append(
-            {"stratum": "S2", "psu": f"P2_{p}", "w": 1.0, "d1": 0, "d2": 1}
-        )
+        rows.append({"stratum": "S2", "psu": f"P2_{p}", "w": 1.0, "d1": 0, "d2": 1})
     df = pl.DataFrame(rows)
 
     rd = ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR")
@@ -602,7 +588,9 @@ def test_brr_invalid_psu_count_raises_value_error(num_psu: int):
 
 
 def test_bootstrap_determinism_same_seed_gives_identical_weights():
-    """Test #1 (5c): Même seed -> colonnes de poids identiques au bit près ; seed différent -> colonnes différentes ; jamais d'appel à numpy.random global."""
+    """Test #1 (5c): Même seed -> colonnes de poids identiques au bit près ;
+    seed différent -> colonnes différentes ; jamais d'appel à numpy.random global.
+    """
     data = []
     for h in range(2):
         for p in range(3):
@@ -643,14 +631,16 @@ def test_bootstrap_determinism_same_seed_gives_identical_weights():
 
 @pytest.mark.slow
 def test_bootstrap_variance_converges_to_taylor_variance():
-    """Test #2 (5c): Bootstrap avec R = 2000 sur un petit plan converge vers la variance de linéarisation à 2 % relatif."""
+    """Test #2 (5c): Bootstrap avec R = 2000 sur un petit plan converge vers
+    la variance de linéarisation à 2 % relatif.
+    """
     data = []
     import numpy as np
 
     rng = np.random.default_rng(123)
     for h in range(3):
         for p in range(10):
-            for i in range(20):
+            for _i in range(20):
                 d1 = int(rng.random() < 0.3)
                 d2 = int(rng.random() < 0.4)
                 w = float(rng.uniform(0.8, 1.5))
@@ -689,7 +679,9 @@ def test_bootstrap_variance_converges_to_taylor_variance():
 
 
 def test_explicit_scale_and_rscales_override_method_defaults():
-    """Test #3 (5c): scale/rscales explicites l'emportent : le même jeu de réplicats avec scale=2*défaut donne exactement le double de variance."""
+    """Test #3 (5c): scale/rscales explicites l'emportent : le même jeu de
+    réplicats avec scale=2*défaut donne exactement le double de variance.
+    """
     data = []
     for h in range(2):
         for p in range(3):
@@ -767,7 +759,9 @@ def test_rscales_wrong_length_raises_value_error_with_both_lengths():
 
 
 def test_sdr_factor_sum_across_replicates_equals_R_per_psu():
-    """Test #5 (5c): SDR : la somme des facteurs de poids sur les réplicats vaut R par PSU (contrôle de cohérence de la construction)."""
+    """Test #5 (5c): SDR : la somme des facteurs de poids sur les réplicats
+    vaut R par PSU (contrôle de cohérence de la construction).
+    """
     data = []
     for h in range(2):
         for p in range(3):
@@ -798,54 +792,78 @@ def test_replicate_oracle_r_survey_validation():
     """Oracle R survey validation for all 6 replicate methods (PLAN.md §18).
 
     Exact numerical co-incidence (< 1e-12) against values obtained from
-    R survey v4.5+ svrepdesign(..., type='other', combined.weights=TRUE, scale=..., rscales=..., mse=TRUE).
+    R survey v4.5+ svrepdesign(..., type='other', combined.weights=TRUE,
+    scale=..., rscales=..., mse=TRUE).
     """
     rows = [
-        {"id": 1,  "stratum": "S1", "psu": "P1", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
-        {"id": 2,  "stratum": "S1", "psu": "P1", "w": 1.2, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
-        {"id": 3,  "stratum": "S1", "psu": "P1", "w": 0.8, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
-        {"id": 4,  "stratum": "S1", "psu": "P2", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
-        {"id": 5,  "stratum": "S1", "psu": "P2", "w": 0.9, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
-        {"id": 6,  "stratum": "S1", "psu": "P2", "w": 1.3, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
-        {"id": 7,  "stratum": "S2", "psu": "P3", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
-        {"id": 8,  "stratum": "S2", "psu": "P3", "w": 1.4, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
-        {"id": 9,  "stratum": "S2", "psu": "P3", "w": 0.7, "i0": 1, "i1": 0, "i2": 1, "i3": 1},
+        {"id": 1, "stratum": "S1", "psu": "P1", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 2, "stratum": "S1", "psu": "P1", "w": 1.2, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {"id": 3, "stratum": "S1", "psu": "P1", "w": 0.8, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
+        {"id": 4, "stratum": "S1", "psu": "P2", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 1},
+        {"id": 5, "stratum": "S1", "psu": "P2", "w": 0.9, "i0": 0, "i1": 0, "i2": 1, "i3": 0},
+        {"id": 6, "stratum": "S1", "psu": "P2", "w": 1.3, "i0": 1, "i1": 0, "i2": 0, "i3": 1},
+        {"id": 7, "stratum": "S2", "psu": "P3", "w": 1.0, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
+        {"id": 8, "stratum": "S2", "psu": "P3", "w": 1.4, "i0": 0, "i1": 1, "i2": 1, "i3": 0},
+        {"id": 9, "stratum": "S2", "psu": "P3", "w": 0.7, "i0": 1, "i1": 0, "i2": 1, "i3": 1},
         {"id": 10, "stratum": "S2", "psu": "P4", "w": 1.2, "i0": 0, "i1": 1, "i2": 0, "i3": 1},
         {"id": 11, "stratum": "S2", "psu": "P4", "w": 1.1, "i0": 1, "i1": 1, "i2": 0, "i3": 0},
         {"id": 12, "stratum": "S2", "psu": "P4", "w": 0.9, "i0": 1, "i1": 0, "i2": 1, "i3": 0},
     ]
     df = pl.DataFrame(rows)
-    spec = Specification(dimensions={"d0": ("i0",), "d1": ("i1",), "d2": ("i2",), "d3": ("i3",)})
+    spec = Specification(
+        dimensions={"d0": ("i0",), "d1": ("i1",), "d2": ("i2",), "d3": ("i3",)}
+    )
 
     expected = {
         "JK1": (
             ReplicateDesign(weights="w", psu="psu", method="JK1"),
-            0.071071279268671, 0.030626421024729, 0.024096025035658
+            0.071071279268671,
+            0.030626421024729,
+            0.024096025035658,
         ),
         "JKn": (
             ReplicateDesign(weights="w", strata="stratum", psu="psu", method="JKn"),
-            0.069789517293668, 0.037001954658435, 0.016329009222744
+            0.069789517293668,
+            0.037001954658435,
+            0.016329009222744,
         ),
         "BRR": (
             ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR"),
-            0.069795497757622, 0.037024245258954, 0.016400226923260
+            0.069795497757622,
+            0.037024245258954,
+            0.016400226923260,
         ),
         "Fay_BRR": (
-            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5),
-            0.069746509434807, 0.036986951217994, 0.016340629661356
+            ReplicateDesign(
+                weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5
+            ),
+            0.069746509434807,
+            0.036986951217994,
+            0.016340629661356,
         ),
         "bootstrap": (
-            ReplicateDesign(weights="w", strata="stratum", psu="psu", method="bootstrap", seed=42, replicates=20),
-            0.069682973191232, 0.032557022819765, 0.017794967898121
+            ReplicateDesign(
+                weights="w",
+                strata="stratum",
+                psu="psu",
+                method="bootstrap",
+                seed=42,
+                replicates=20,
+            ),
+            0.069682973191232,
+            0.032557022819765,
+            0.017794967898121,
         ),
         "SDR": (
             ReplicateDesign(weights="w", strata="stratum", psu="psu", method="SDR"),
-            0.079464274906868, 0.037350194761795, 0.020547509711949
+            0.079464274906868,
+            0.037350194761795,
+            0.020547509711949,
         ),
     }
 
     for method, (des, exp_h_se, exp_m0_se, exp_a_se) in expected.items():
-        res = estimate(df, spec, des, k=1/3)
+        res = estimate(df, spec, des, k=1 / 3)
         se_df = res.se()
         h_se = se_df.filter(pl.col("measure") == "H")["se"].item()
         m0_se = se_df.filter(pl.col("measure") == "M0")["se"].item()
@@ -854,6 +872,3 @@ def test_replicate_oracle_r_survey_validation():
         assert h_se == pytest.approx(exp_h_se, abs=1e-12), f"{method} H SE mismatch"
         assert m0_se == pytest.approx(exp_m0_se, abs=1e-12), f"{method} M0 SE mismatch"
         assert a_se == pytest.approx(exp_a_se, abs=1e-12), f"{method} A SE mismatch"
-
-
-

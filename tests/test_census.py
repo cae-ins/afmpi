@@ -6,7 +6,6 @@ import pandas as pd
 import polars as pl
 import pytest
 
-import afmpi
 from afmpi import CensusDesign, Specification, SurveyDesign, estimate
 
 
@@ -18,7 +17,18 @@ def census_data() -> pl.DataFrame:
             "ind2": [0, 1, 1, 0, 0, 1, 1, 0, 0, 1],
             "ind3": [1, 1, 0, 0, 1, 0, 1, 1, 1, 0],
             "weight": [1.5] * 10,
-            "region": ["North", "North", "North", "South", "South", "South", "East", "East", "West", "West"],
+            "region": [
+                "North",
+                "North",
+                "North",
+                "South",
+                "South",
+                "South",
+                "East",
+                "East",
+                "West",
+                "West",
+            ],
         }
     )
 

@@ -51,9 +51,7 @@ def test_all_three_policies_identical_when_no_missing_values():
     )
     spec_lw = Specification({"d": ["i1", "i2", "i3"]}, missing_policy="listwise_deletion")
     spec_rw = Specification({"d": ["i1", "i2", "i3"]}, missing_policy="reweighting")
-    spec_tan = Specification(
-        {"d": ["i1", "i2", "i3"]}, missing_policy="treat_as_nondeprived"
-    )
+    spec_tan = Specification({"d": ["i1", "i2", "i3"]}, missing_policy="treat_as_nondeprived")
 
     res_lw = estimate(data, spec_lw, k=0.5)
     res_rw = estimate(data, spec_rw, k=0.5)
@@ -79,9 +77,11 @@ def test_hand_calculated_three_distinct_c_i_scores():
       g1=1, g2=0 -> c_i = 0.5 * 1 + 0.5 * 0 = 0.5 (exact: 1/2).
     - treat_as_nondeprived: Weights (1/3, 1/3, 1/3) unchanged.
       Missing i3 treated as non-deprived (g3=0).
-      g1=1, g2=0, g3=0 -> c_i = (1/3) * 1 + (1/3) * 0 + (1/3) * 0 = 1/3 (exact: 0.3333333333333333).
+      g1=1, g2=0, g3=0 -> c_i = (1/3)*1 + (1/3)*0 + (1/3)*0 = 1/3
+      (exact: 0.3333333333333333).
     - Custom policy (treat_as_deprived): Missing i3 treated as deprived (g3=1).
-      g1=1, g2=0, g3=1 -> c_i = (1/3) * 1 + (1/3) * 0 + (1/3) * 1 = 2/3 (exact: 0.6666666666666666).
+      g1=1, g2=0, g3=1 -> c_i = (1/3)*1 + (1/3)*0 + (1/3)*1 = 2/3
+      (exact: 0.6666666666666666).
     """
     data = pl.DataFrame(
         {
@@ -92,9 +92,7 @@ def test_hand_calculated_three_distinct_c_i_scores():
     )
 
     # 1. listwise_deletion drops the row
-    spec_lw = Specification(
-        {"d": ["i1", "i2", "i3"]}, missing_policy="listwise_deletion"
-    )
+    spec_lw = Specification({"d": ["i1", "i2", "i3"]}, missing_policy="listwise_deletion")
     with pytest.raises(ValueError, match="no observations remain"):
         estimate(data, spec_lw)
 
@@ -104,9 +102,7 @@ def test_hand_calculated_three_distinct_c_i_scores():
     assert res_rw.scores()["score"][0] == pytest.approx(0.5)
 
     # 3. treat_as_nondeprived -> c_i = 1/3
-    spec_tan = Specification(
-        {"d": ["i1", "i2", "i3"]}, missing_policy="treat_as_nondeprived"
-    )
+    spec_tan = Specification({"d": ["i1", "i2", "i3"]}, missing_policy="treat_as_nondeprived")
     res_tan = estimate(data, spec_tan, k=0.1)
     assert res_tan.scores()["score"][0] == pytest.approx(1 / 3)
 
@@ -128,9 +124,7 @@ def test_hand_calculated_three_distinct_c_i_scores():
         ]
         return df.with_columns(*g_cols, *obs_cols).with_columns(*wc_cols)
 
-    spec_custom = Specification(
-        {"d": ["i1", "i2", "i3"]}, missing_policy=treat_as_deprived
-    )
+    spec_custom = Specification({"d": ["i1", "i2", "i3"]}, missing_policy=treat_as_deprived)
     res_custom = estimate(data, spec_custom, k=0.1)
     assert res_custom.scores()["score"][0] == pytest.approx(2 / 3)
 
@@ -160,9 +154,7 @@ def test_treat_as_nondeprived_keeps_all_rows():
             "i2": [None, None],
         }
     )
-    spec = Specification(
-        {"d": ["i1", "i2"]}, missing_policy="treat_as_nondeprived"
-    )
+    spec = Specification({"d": ["i1", "i2"]}, missing_policy="treat_as_nondeprived")
     res = estimate(data, spec, k=0.5)
 
     assert res.observations == 2

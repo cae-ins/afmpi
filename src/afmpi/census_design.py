@@ -35,9 +35,7 @@ class CensusDesign(Design):
     def required_columns(self) -> tuple[str, ...]:
         """Numeric columns multiplied together to form the population weight."""
 
-        return tuple(
-            name for name in (self.weights, self.household_size) if name is not None
-        )
+        return tuple(name for name in (self.weights, self.household_size) if name is not None)
 
     @property
     def design_columns(self) -> tuple[str, ...]:

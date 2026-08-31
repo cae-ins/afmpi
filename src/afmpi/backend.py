@@ -1,8 +1,9 @@
-"""Ingestion backend: convert input frames into Polars DataFrame or LazyFrame (PLAN.md §14.9)."""
+"""Ingestion backend: convert input frames to Polars DataFrame or LazyFrame (PLAN.md §14.9)."""
 
 from __future__ import annotations
 
 from typing import Literal
+
 import pandas as pd
 import polars as pl
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pandas as pd
@@ -143,9 +144,11 @@ class EstimationResult:
             self._estimates.filter(pl.col("measure").is_in(_AGGREGATE))
             .pivot(on="measure", index=index, values="est")
             .rename({"obs": "observations"})
-            .with_columns(pl.lit(self.excluded_observations, dtype=pl.Int64).alias(
-                "excluded_observations"
-            ))
+            .with_columns(
+                pl.lit(self.excluded_observations, dtype=pl.Int64).alias(
+                    "excluded_observations"
+                )
+            )
         )
         ordered = [
             *[name for name in self._identifiers() if name != "k"],
@@ -157,9 +160,7 @@ class EstimationResult:
         ]
         if "k" not in self._identifiers():
             ordered = [
-                pl.lit(self._cutoffs[0], dtype=pl.Float64).alias("k")
-                if name == "k"
-                else name
+                pl.lit(self._cutoffs[0], dtype=pl.Float64).alias("k") if name == "k" else name
                 for name in ordered
             ]
         return self._convert(wide.select(ordered))
@@ -185,7 +186,8 @@ class EstimationResult:
 
         if self._matrix is None:
             raise ValueError(
-                "scores() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming"
+                "scores() requires an in-memory result; re-run estimate() without "
+                "lazy=True/CensusDesign streaming"
             )
 
         frames = []
@@ -205,9 +207,9 @@ class EstimationResult:
                 .select("score", "poor", "censored_score", "population_weight")
             )
             if len(self._cutoffs) > 1:
-                frame = frame.with_columns(
-                    pl.lit(cutoff, dtype=pl.Float64).alias("k")
-                ).select("k", "score", "poor", "censored_score", "population_weight")
+                frame = frame.with_columns(pl.lit(cutoff, dtype=pl.Float64).alias("k")).select(
+                    "k", "score", "poor", "censored_score", "population_weight"
+                )
             frames.append(frame)
         return self._convert(pl.concat(frames))
 
@@ -247,7 +249,9 @@ class EstimationResult:
                 rows_in=self.observations,
                 rows_out=self.observations - self.excluded_observations,
                 dropped=self.excluded_observations,
-                per_indicator=pl.DataFrame() if self._input_kind != "pandas" else pd.DataFrame(),
+                per_indicator=pl.DataFrame()
+                if self._input_kind != "pandas"
+                else pd.DataFrame(),
             )
         report = self._matrix.missing_report
         if self._matrix.input_kind == "pandas":
@@ -270,7 +274,8 @@ class EstimationResult:
 
         if self._matrix is None:
             raise ValueError(
-                "scores() requires an in-memory result; re-run estimate() without lazy=True/CensusDesign streaming"
+                "scores() requires an in-memory result; re-run estimate() without "
+                "lazy=True/CensusDesign streaming"
             )
 
         from .estimation import _estimate_from_matrix
@@ -432,6 +437,8 @@ class EstimationResult:
         return ", ".join(f"{value:.6g}" for value in self._cutoffs)
 
     def _convert(self, frame: pl.DataFrame):
-        if self._input_kind == "pandas" or (self._matrix is not None and self._matrix.input_kind == "pandas"):
+        if self._input_kind == "pandas" or (
+            self._matrix is not None and self._matrix.input_kind == "pandas"
+        ):
             return frame.to_pandas()
         return frame

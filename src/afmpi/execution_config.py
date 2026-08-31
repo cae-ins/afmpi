@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import warnings
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +49,8 @@ class ExecutionConfig:
         if self.spill_dir is not None:
             warnings.warn(
                 f"ExecutionConfig.spill_dir={self.spill_dir!r} is currently a no-op "
-                "in this version of afmpi; out-of-core spill directory configuration is not active.",
+                "in this version of afmpi; out-of-core spill directory configuration "
+                "is not active.",
                 UserWarning,
                 stacklevel=2,
             )

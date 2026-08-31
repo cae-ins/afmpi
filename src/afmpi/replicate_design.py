@@ -56,9 +56,10 @@ class ReplicateDesign(Design):
         if self.replicate_weights is not None:
             if isinstance(self.replicate_weights, list):
                 object.__setattr__(self, "replicate_weights", tuple(self.replicate_weights))
-            if not isinstance(self.replicate_weights, tuple) or len(
-                self.replicate_weights
-            ) == 0:
+            if (
+                not isinstance(self.replicate_weights, tuple)
+                or len(self.replicate_weights) == 0
+            ):
                 raise ValueError("replicate_weights must be a non-empty tuple of column names")
             for name in self.replicate_weights:
                 if not isinstance(name, str) or not name.strip():
@@ -99,9 +100,8 @@ class ReplicateDesign(Design):
                 raise TypeError("rscales must be a tuple of floats")
             rscales_tuples = tuple(float(x) for x in self.rscales)
             object.__setattr__(self, "rscales", rscales_tuples)
-            if (
-                self.replicate_weights is not None
-                and len(self.rscales) != len(self.replicate_weights)
+            if self.replicate_weights is not None and len(self.rscales) != len(
+                self.replicate_weights
             ):
                 raise ValueError(
                     f"rscales length ({len(self.rscales)}) must match replicate_weights "
@@ -115,9 +115,7 @@ class ReplicateDesign(Design):
     def required_columns(self) -> tuple[str, ...]:
         """Numeric columns multiplied together to form the population weight."""
 
-        return tuple(
-            name for name in (self.weights, self.household_size) if name is not None
-        )
+        return tuple(name for name in (self.weights, self.household_size) if name is not None)
 
     @property
     def design_columns(self) -> tuple[str, ...]:

@@ -1,4 +1,4 @@
-"""Conformity tests for ReplicateDesign methods (JK1, JKn, BRR, Fay BRR, Bootstrap, SDR) (PLAN.md §14.10)."""
+"""Conformity tests for ReplicateDesign methods (JK, BRR, Fay, Boot, SDR) (PLAN.md §14.10)."""
 
 from __future__ import annotations
 
@@ -30,20 +30,28 @@ def test_replication_conformity():
         "JK1": ReplicateDesign(weights="w", psu="psu", method="JK1"),
         "JKn": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="JKn"),
         "BRR": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="BRR"),
-        "Fay_BRR": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5),
-        "bootstrap": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="bootstrap", seed=42, replicates=20),
+        "Fay_BRR": ReplicateDesign(
+            weights="w", strata="stratum", psu="psu", method="Fay_BRR", fay=0.5
+        ),
+        "bootstrap": ReplicateDesign(
+            weights="w", strata="stratum", psu="psu", method="bootstrap", seed=42, replicates=20
+        ),
         "SDR": ReplicateDesign(weights="w", strata="stratum", psu="psu", method="SDR"),
     }
 
     for method, des in rep_designs.items():
-        res = estimate(df_rep, spec, des, k=1/3)
+        res = estimate(df_rep, spec, des, k=1 / 3)
         estimates = res.estimates()
 
         for suffix in ["H", "M0", "A"]:
             val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_{method}")
             row = estimates.filter(pl.col("measure") == suffix).row(0, named=True)
-            assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_{method} est"
-            assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_{method} se"
+            assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+                f"Mismatch in {suffix}_{method} est"
+            )
+            assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+                f"Mismatch in {suffix}_{method} se"
+            )
             assert row["df"] == val["df"], f"Mismatch in {suffix}_{method} df"
 
 
@@ -52,4 +60,7 @@ def test_replication_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
     stata_ref = REF_DIR / "replication_stata.json"
     if not stata_ref.exists():
-        pytest.skip("Stata mpitb reference file replication_stata.json is not present (PLAN.md §14.10/§14.13)")
+        pytest.skip(
+            "Stata mpitb reference file replication_stata.json is not present "
+            "(PLAN.md §14.10/§14.13)"
+        )

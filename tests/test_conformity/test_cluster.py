@@ -30,7 +30,7 @@ def test_cluster_1stage_conformity():
     spec = Specification({"d": ["i0", "i1", "i2", "i3"]})
     design = SurveyDesign(weights="w", household_size="size", psu="psu")
 
-    res = estimate(df_cl, spec, design, k=1/3)
+    res = estimate(df_cl, spec, design, k=1 / 3)
     estimates = res.estimates()
 
     for val in ref["values"]:
@@ -54,7 +54,7 @@ def test_stratified_cluster_conformity():
     spec = Specification({"d": ["i0", "i1", "i2", "i3"]})
     design = SurveyDesign(weights="w", household_size="size", strata="stratum", psu="psu")
 
-    res = estimate(df_scl, spec, design, k=1/3)
+    res = estimate(df_scl, spec, design, k=1 / 3)
     estimates = res.estimates()
 
     for val in ref["values"]:
@@ -70,4 +70,7 @@ def test_cluster_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
     stata_ref = REF_DIR / "cluster_stata.json"
     if not stata_ref.exists():
-        pytest.skip("Stata mpitb reference file cluster_stata.json is not present (PLAN.md §14.10/§14.13)")
+        pytest.skip(
+            "Stata mpitb reference file cluster_stata.json is not present "
+            "(PLAN.md §14.10/§14.13)"
+        )

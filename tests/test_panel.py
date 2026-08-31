@@ -4,33 +4,141 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from afmpi import Specification, SurveyDesign, ReplicateDesign, estimate
+from afmpi import ReplicateDesign, Specification, SurveyDesign, estimate
 
 
 def _make_panel_data():
     """Construct a 2-wave panel dataset with 1 stratum, 2 PSUs (c1, c2), 4 households."""
 
     rows_t0 = [
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "d3": 1, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 1, "d2": 0, "d3": 1, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 0, "d2": 0, "d3": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 0, "d2": 1, "d3": 0, "w": 1.0},
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "d1": 1,
+            "d2": 1,
+            "d3": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "d1": 1,
+            "d2": 0,
+            "d3": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "d1": 0,
+            "d2": 0,
+            "d3": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "d1": 0,
+            "d2": 1,
+            "d3": 0,
+            "w": 1.0,
+        },
     ]
 
     # Perfect positive correlation between waves
     rows_t1_pos = [
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "d3": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 1, "d2": 1, "d3": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 0, "d2": 0, "d3": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 0, "d2": 0, "d3": 1, "w": 1.0},
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "d1": 1,
+            "d2": 1,
+            "d3": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "d1": 1,
+            "d2": 1,
+            "d3": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "d1": 0,
+            "d2": 0,
+            "d3": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "d1": 0,
+            "d2": 0,
+            "d3": 1,
+            "w": 1.0,
+        },
     ]
 
     # Constructed negative correlation between waves
     rows_t1_neg = [
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 0, "d2": 0, "d3": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 0, "d2": 0, "d3": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 1, "d2": 1, "d3": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 1, "d2": 1, "d3": 1, "w": 1.0},
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "d1": 0,
+            "d2": 0,
+            "d3": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "d1": 0,
+            "d2": 0,
+            "d3": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "d1": 1,
+            "d2": 1,
+            "d3": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "d1": 1,
+            "d2": 1,
+            "d3": 1,
+            "w": 1.0,
+        },
     ]
 
     df_pos = pl.DataFrame(rows_t0 + rows_t1_pos)
@@ -51,7 +159,7 @@ def test_perfect_panel_variance_reduction():
     # Filter H at k=1/3, type='abs'
     h_abs = changes.filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
     se_delta = h_abs.select("se").item()
-    var_delta = se_delta ** 2
+    var_delta = se_delta**2
 
     # Calculate V0, V1 and C by hand for H at k=1/3:
     # t0: h1 (poor=1), h2 (poor=1), h3 (poor=0), h4 (poor=1). H_t0 = 3/4 = 0.75.
@@ -82,7 +190,7 @@ def test_constructed_negative_correlation():
 
     h_abs = changes.filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
     se_delta = h_abs.select("se").item()
-    var_delta = se_delta ** 2
+    var_delta = se_delta**2
 
     # Hand values:
     # t0: H_t0 = 0.75, u_c1^(0) = 0.125, u_c2^(0) = -0.125, V0 = 0.0625.
@@ -101,7 +209,9 @@ def test_constructed_negative_correlation():
 
 
 def test_overlap_independent_forces_zero_covariance():
-    """Test 3 (§14.6b): overlap='independent' on panel data gives exactly V1 + V0 (full design) and logs diagnostic."""
+    """Test 3 (§14.6b): overlap='independent' on panel data gives exactly
+    V1 + V0 (full design) and logs diagnostic.
+    """
 
     df_pos, _ = _make_panel_data()
     spec = Specification({"d1": ["d1"], "d2": ["d2"], "d3": ["d3"]})
@@ -112,7 +222,7 @@ def test_overlap_independent_forces_zero_covariance():
 
     h_abs = changes.filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
     se_delta = h_abs.select("se").item()
-    var_delta = se_delta ** 2
+    var_delta = se_delta**2
 
     # Under 4 independent clusters (m=4), m/(m-1) = 4/3.
     # v0_full = (4/3) * (0.015625 + 0.015625) = 1/24 = 0.04166666666666667
@@ -140,28 +250,106 @@ def test_overlap_panel_without_overlap_raises_error():
     """Test 4 (§14.6b): overlap='panel' without overlap raises ValueError."""
 
     # Disjoint waves (different clusters and hhids)
-    df_no_overlap = pl.DataFrame([
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "d3": 1, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h2", "d1": 0, "d2": 0, "d3": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c3", "hhid": "h3", "d1": 1, "d2": 0, "d3": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c4", "hhid": "h4", "d1": 0, "d2": 1, "d3": 0, "w": 1.0},
-    ])
+    df_no_overlap = pl.DataFrame(
+        [
+            {
+                "wave": "t0",
+                "stratum": "s1",
+                "cluster": "c1",
+                "hhid": "h1",
+                "d1": 1,
+                "d2": 1,
+                "d3": 1,
+                "w": 1.0,
+            },
+            {
+                "wave": "t0",
+                "stratum": "s1",
+                "cluster": "c2",
+                "hhid": "h2",
+                "d1": 0,
+                "d2": 0,
+                "d3": 0,
+                "w": 1.0,
+            },
+            {
+                "wave": "t1",
+                "stratum": "s1",
+                "cluster": "c3",
+                "hhid": "h3",
+                "d1": 1,
+                "d2": 0,
+                "d3": 1,
+                "w": 1.0,
+            },
+            {
+                "wave": "t1",
+                "stratum": "s1",
+                "cluster": "c4",
+                "hhid": "h4",
+                "d1": 0,
+                "d2": 1,
+                "d3": 0,
+                "w": 1.0,
+            },
+        ]
+    )
     spec = Specification({"d1": ["d1"], "d2": ["d2"], "d3": ["d3"]})
     design = SurveyDesign(strata="stratum", psu="cluster", weights="w")
 
-    with pytest.raises(ValueError, match="overlap='panel' was requested but no unit is shared between waves"):
+    with pytest.raises(
+        ValueError, match="overlap='panel' was requested but no unit is shared between waves"
+    ):
         estimate(df_no_overlap, spec, design, tvar="wave", panel_id="hhid", overlap="panel")
 
 
 def test_overlap_auto_without_overlap_retains_independent_regime():
     """Test 5 (§14.6b): overlap='auto' without overlap logs independent regime."""
 
-    df_no_overlap = pl.DataFrame([
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "d3": 1, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h2", "d1": 0, "d2": 0, "d3": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c3", "hhid": "h3", "d1": 1, "d2": 0, "d3": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c4", "hhid": "h4", "d1": 0, "d2": 1, "d3": 0, "w": 1.0},
-    ])
+    df_no_overlap = pl.DataFrame(
+        [
+            {
+                "wave": "t0",
+                "stratum": "s1",
+                "cluster": "c1",
+                "hhid": "h1",
+                "d1": 1,
+                "d2": 1,
+                "d3": 1,
+                "w": 1.0,
+            },
+            {
+                "wave": "t0",
+                "stratum": "s1",
+                "cluster": "c2",
+                "hhid": "h2",
+                "d1": 0,
+                "d2": 0,
+                "d3": 0,
+                "w": 1.0,
+            },
+            {
+                "wave": "t1",
+                "stratum": "s1",
+                "cluster": "c3",
+                "hhid": "h3",
+                "d1": 1,
+                "d2": 0,
+                "d3": 1,
+                "w": 1.0,
+            },
+            {
+                "wave": "t1",
+                "stratum": "s1",
+                "cluster": "c4",
+                "hhid": "h4",
+                "d1": 0,
+                "d2": 1,
+                "d3": 0,
+                "w": 1.0,
+            },
+        ]
+    )
     spec = Specification({"d1": ["d1"], "d2": ["d2"], "d3": ["d3"]})
     design = SurveyDesign(strata="stratum", psu="cluster", weights="w")
 
@@ -181,18 +369,26 @@ def test_overlap_auto_without_overlap_retains_independent_regime():
 
 
 def test_replicate_design_divergent_weights_raises_error():
-    """Test 6 (§14.6b): Replicate design with divergent replicate columns between waves raises ValueError."""
+    """Test 6 (§14.6b): Replicate design with divergent replicate columns
+    between waves raises ValueError.
+    """
 
-    df_rep = pl.DataFrame([
-        {"wave": "t0", "d1": 1, "d2": 1, "d3": 1, "w": 1.0, "w_rep1": 1.1, "w_rep2": 0.9},
-        {"wave": "t0", "d1": 0, "d2": 0, "d3": 0, "w": 1.0, "w_rep1": 0.9, "w_rep2": 1.1},
-        {"wave": "t1", "d1": 1, "d2": 0, "d3": 1, "w": 1.0, "w_rep1": 0.0, "w_rep2": 0.0},
-        {"wave": "t1", "d1": 0, "d2": 1, "d3": 0, "w": 1.0, "w_rep1": 0.0, "w_rep2": 0.0},
-    ])
+    df_rep = pl.DataFrame(
+        [
+            {"wave": "t0", "d1": 1, "d2": 1, "d3": 1, "w": 1.0, "w_rep1": 1.1, "w_rep2": 0.9},
+            {"wave": "t0", "d1": 0, "d2": 0, "d3": 0, "w": 1.0, "w_rep1": 0.9, "w_rep2": 1.1},
+            {"wave": "t1", "d1": 1, "d2": 0, "d3": 1, "w": 1.0, "w_rep1": 0.0, "w_rep2": 0.0},
+            {"wave": "t1", "d1": 0, "d2": 1, "d3": 0, "w": 1.0, "w_rep1": 0.0, "w_rep2": 0.0},
+        ]
+    )
     spec = Specification({"d1": ["d1"], "d2": ["d2"], "d3": ["d3"]})
-    rep_design = ReplicateDesign(weights="w", replicate_weights=["w_rep1", "w_rep2"], method="BRR")
+    rep_design = ReplicateDesign(
+        weights="w", replicate_weights=["w_rep1", "w_rep2"], method="BRR"
+    )
 
-    with pytest.raises(ValueError, match="Replicate design weights or configuration diverge between waves"):
+    with pytest.raises(
+        ValueError, match="Replicate design weights or configuration diverge between waves"
+    ):
         estimate(df_rep, spec, rep_design, tvar="wave")
 
 
@@ -203,44 +399,191 @@ def test_panel_oracle_r_survey_validation():
     """
     # 1. Perfect panel
     rows_perf_t0 = [
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 1, "d2": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 0, "d2": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 0, "d2": 1, "w": 1.0},
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "d1": 1,
+            "d2": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "d1": 1,
+            "d2": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "d1": 0,
+            "d2": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "d1": 0,
+            "d2": 1,
+            "w": 1.0,
+        },
     ]
     rows_perf_t1 = [
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h1", "d1": 1, "d2": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c1", "hhid": "h2", "d1": 1, "d2": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h3", "d1": 0, "d2": 0, "w": 1.0},
-        {"wave": "t1", "stratum": "s1", "cluster": "c2", "hhid": "h4", "d1": 0, "d2": 0, "w": 1.0},
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h1",
+            "d1": 1,
+            "d2": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c1",
+            "hhid": "h2",
+            "d1": 1,
+            "d2": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h3",
+            "d1": 0,
+            "d2": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "s1",
+            "cluster": "c2",
+            "hhid": "h4",
+            "d1": 0,
+            "d2": 0,
+            "w": 1.0,
+        },
     ]
     df_perf = pl.DataFrame(rows_perf_t0 + rows_perf_t1)
     spec = Specification(dimensions={"d1": ("d1",), "d2": ("d2",)})
     design = SurveyDesign(strata="stratum", psu="cluster", weights="w")
 
     res_perf = estimate(df_perf, spec, design, tvar="wave", panel_id="hhid", overlap="auto")
-    h_abs_perf = res_perf.changes().filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
+    h_abs_perf = res_perf.changes().filter(
+        (pl.col("measure") == "H") & (pl.col("type") == "abs")
+    )
     assert h_abs_perf.select("est").item() == pytest.approx(-0.25, abs=1e-12)
     assert h_abs_perf.select("se").item() == pytest.approx(0.25, abs=1e-12)
 
     # 2. Partial overlap panel
     rows_part_t0 = [
-        {"wave": "t0", "stratum": "S1", "cluster": "P1", "hhid": "h1", "d1": 1, "d2": 1, "w": 1.2},
-        {"wave": "t0", "stratum": "S1", "cluster": "P1", "hhid": "h2", "d1": 0, "d2": 1, "w": 0.8},
-        {"wave": "t0", "stratum": "S1", "cluster": "P2", "hhid": "h3", "d1": 1, "d2": 0, "w": 1.0},
-        {"wave": "t0", "stratum": "S2", "cluster": "P3", "hhid": "h5", "d1": 0, "d2": 0, "w": 1.1},
-        {"wave": "t0", "stratum": "S2", "cluster": "P4", "hhid": "h6", "d1": 1, "d2": 1, "w": 0.9},
+        {
+            "wave": "t0",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h1",
+            "d1": 1,
+            "d2": 1,
+            "w": 1.2,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h2",
+            "d1": 0,
+            "d2": 1,
+            "w": 0.8,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S1",
+            "cluster": "P2",
+            "hhid": "h3",
+            "d1": 1,
+            "d2": 0,
+            "w": 1.0,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S2",
+            "cluster": "P3",
+            "hhid": "h5",
+            "d1": 0,
+            "d2": 0,
+            "w": 1.1,
+        },
+        {
+            "wave": "t0",
+            "stratum": "S2",
+            "cluster": "P4",
+            "hhid": "h6",
+            "d1": 1,
+            "d2": 1,
+            "w": 0.9,
+        },
     ]
     rows_part_t1 = [
-        {"wave": "t1", "stratum": "S1", "cluster": "P1", "hhid": "h1", "d1": 1, "d2": 0, "w": 1.2},
-        {"wave": "t1", "stratum": "S1", "cluster": "P1", "hhid": "h2", "d1": 1, "d2": 1, "w": 0.8},
-        {"wave": "t1", "stratum": "S1", "cluster": "P2", "hhid": "h4", "d1": 0, "d2": 1, "w": 1.0},
-        {"wave": "t1", "stratum": "S2", "cluster": "P3", "hhid": "h5", "d1": 0, "d2": 1, "w": 1.1},
-        {"wave": "t1", "stratum": "S2", "cluster": "P4", "hhid": "h7", "d1": 0, "d2": 0, "w": 0.9},
+        {
+            "wave": "t1",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h1",
+            "d1": 1,
+            "d2": 0,
+            "w": 1.2,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S1",
+            "cluster": "P1",
+            "hhid": "h2",
+            "d1": 1,
+            "d2": 1,
+            "w": 0.8,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S1",
+            "cluster": "P2",
+            "hhid": "h4",
+            "d1": 0,
+            "d2": 1,
+            "w": 1.0,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S2",
+            "cluster": "P3",
+            "hhid": "h5",
+            "d1": 0,
+            "d2": 1,
+            "w": 1.1,
+        },
+        {
+            "wave": "t1",
+            "stratum": "S2",
+            "cluster": "P4",
+            "hhid": "h7",
+            "d1": 0,
+            "d2": 0,
+            "w": 0.9,
+        },
     ]
     df_part = pl.DataFrame(rows_part_t0 + rows_part_t1)
     res_part = estimate(df_part, spec, design, tvar="wave", panel_id="hhid", overlap="auto")
-    h_abs_part = res_part.changes().filter((pl.col("measure") == "H") & (pl.col("type") == "abs"))
+    h_abs_part = res_part.changes().filter(
+        (pl.col("measure") == "H") & (pl.col("type") == "abs")
+    )
     assert h_abs_part.select("est").item() == pytest.approx(0.04, abs=1e-12)
     assert h_abs_part.select("se").item() == pytest.approx(0.39848031319, abs=1e-10)
-

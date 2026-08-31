@@ -38,8 +38,12 @@ def test_overlap_conformity():
         k=0.5,
     )
     ch_perf = res_perf.changes()
-    h_ch_perf = ch_perf.filter((pl.col("measure") == "H") & (pl.col("type") == "abs")).row(0, named=True)
-    m0_ch_perf = ch_perf.filter((pl.col("measure") == "M0") & (pl.col("type") == "abs")).row(0, named=True)
+    h_ch_perf = ch_perf.filter((pl.col("measure") == "H") & (pl.col("type") == "abs")).row(
+        0, named=True
+    )
+    m0_ch_perf = ch_perf.filter((pl.col("measure") == "M0") & (pl.col("type") == "abs")).row(
+        0, named=True
+    )
 
     val_h_perf = next(v for v in ref["values"] if v["measure"] == "Delta_H_perfect")
     assert h_ch_perf["est"] == pytest.approx(val_h_perf["est"], abs=tol["est"])
@@ -63,7 +67,9 @@ def test_overlap_conformity():
         k=0.5,
     )
     ch_part = res_part.changes()
-    h_ch_part = ch_part.filter((pl.col("measure") == "H") & (pl.col("type") == "abs")).row(0, named=True)
+    h_ch_part = ch_part.filter((pl.col("measure") == "H") & (pl.col("type") == "abs")).row(
+        0, named=True
+    )
 
     val_h_part = next(v for v in ref["values"] if v["measure"] == "Delta_H_partial")
     assert h_ch_part["est"] == pytest.approx(val_h_part["est"], abs=tol["est"])
@@ -76,4 +82,7 @@ def test_overlap_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
     stata_ref = REF_DIR / "overlap_stata.json"
     if not stata_ref.exists():
-        pytest.skip("Stata mpitb reference file overlap_stata.json is not present (PLAN.md §14.10/§14.13)")
+        pytest.skip(
+            "Stata mpitb reference file overlap_stata.json is not present "
+            "(PLAN.md §14.10/§14.13)"
+        )

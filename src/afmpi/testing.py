@@ -10,14 +10,14 @@ class HypothesisTest:
     """Wald hypothesis test of contrasts between domains or against zero (PLAN.md §14.7)."""
 
     terms: tuple[str, ...]
-    estimate: float          # L·θ̂ (scalar if q == 1, else nan)
-    se: float                # sqrt(L·V·Lᵀ) if q == 1, else nan
+    estimate: float  # L·θ̂ (scalar if q == 1, else nan)
+    se: float  # sqrt(L·V·Lᵀ) if q == 1, else nan
     statistic: float
-    df1: int                 # q, rank of contrast
-    df2: int                 # degrees of freedom of design
+    df1: int  # q, rank of contrast
+    df2: int  # degrees of freedom of design
     p_value: float
     method: str = "Wald"
-    dist: str = "F"          # "F" | "chisq"
+    dist: str = "F"  # "F" | "chisq"
 
     def __str__(self) -> str:
         if self.df1 == 1:

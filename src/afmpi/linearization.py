@@ -42,9 +42,9 @@ what the tests check the aggregated path against.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
-from typing import Sequence
 
 import polars as pl
 
@@ -80,7 +80,11 @@ def _totals_exprs(
     estimands: Sequence[RatioEstimand],
     weight: pl.Expr | str | None = None,
 ) -> list[pl.Expr]:
-    n = pl.col(WEIGHT) if weight is None else (pl.col(weight) if isinstance(weight, str) else weight)
+    n = (
+        pl.col(WEIGHT)
+        if weight is None
+        else (pl.col(weight) if isinstance(weight, str) else weight)
+    )
     exprs: list[pl.Expr] = []
     for item in estimands:
         exprs.append((n * item.y).sum().alias(_NUMERATOR_PREFIX + item.key))
@@ -106,7 +110,9 @@ def totals(
 ) -> tuple[RatioTotals, ...]:
     """First pass: the weighted totals ``Y`` and ``X`` of every estimand."""
 
-    aggregated = totals_lazy(frame.lazy(), estimands, weight=weight).collect().row(0, named=True)
+    aggregated = (
+        totals_lazy(frame.lazy(), estimands, weight=weight).collect().row(0, named=True)
+    )
     return tuple(
         RatioTotals(
             estimand=item,
@@ -153,7 +159,11 @@ def _cluster_sums_exprs(
     estimands: Sequence[RatioEstimand],
     weight: pl.Expr | str | None = None,
 ) -> list[pl.Expr]:
-    n = pl.col(WEIGHT) if weight is None else (pl.col(weight) if isinstance(weight, str) else weight)
+    n = (
+        pl.col(WEIGHT)
+        if weight is None
+        else (pl.col(weight) if isinstance(weight, str) else weight)
+    )
     return [
         *_totals_exprs(estimands, n),
         n.sum().alias("__afmpi_cluster_weight"),
@@ -180,7 +190,9 @@ def cluster_sums(
 ) -> pl.DataFrame:
     """Collapse the sample to one row per cluster, keeping ``n*y`` and ``n*x``."""
 
-    return cluster_sums_lazy(frame.lazy(), estimands, weight=weight, group_columns=group_columns).collect()
+    return cluster_sums_lazy(
+        frame.lazy(), estimands, weight=weight, group_columns=group_columns
+    ).collect()
 
 
 def cluster_influence(

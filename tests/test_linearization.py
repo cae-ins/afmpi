@@ -9,8 +9,8 @@ computing the right thing, and if they fail, no design can rescue it.
 import polars as pl
 import pytest
 
-from afmpi import Specification, SurveyDesign
-from afmpi import deprivation, estimands as estimands_module, linearization
+from afmpi import Specification, SurveyDesign, deprivation, linearization
+from afmpi import estimands as estimands_module
 from afmpi.deprivation import PSU, STRATUM, WEIGHT
 
 TOLERANCE = 1e-12
@@ -55,9 +55,7 @@ def random_frame(seed=7, rows=250, indicators=5):
     columns["size"] = [generator.randint(1, 9) for _ in range(rows)]
     columns["psu"] = [generator.randint(1, 25) for _ in range(rows)]
     columns["stratum"] = [generator.randint(1, 4) for _ in range(rows)]
-    spec = Specification(
-        {"d1": ["i0", "i1"], "d2": ["i2"], "d3": ["i3", "i4"]}
-    )
+    spec = Specification({"d1": ["i0", "i1"], "d2": ["i2"], "d3": ["i3", "i4"]})
     design = SurveyDesign(weights="w", household_size="size", strata="stratum", psu="psu")
     return pl.DataFrame(columns), spec, design
 
@@ -67,7 +65,7 @@ def random_frame(seed=7, rows=250, indicators=5):
 # --------------------------------------------------------------------------- #
 def test_influence_values_sum_to_zero_for_every_estimand():
     _, _, ratios, influence = linearized()
-    for key, column in zip(influence.columns, influence.iter_columns()):
+    for key, column in zip(influence.columns, influence.iter_columns(), strict=True):
         if ratios[key].value is None:
             continue
         assert column.sum() == pytest.approx(0.0, abs=TOLERANCE), key
@@ -76,7 +74,7 @@ def test_influence_values_sum_to_zero_for_every_estimand():
 def test_influence_values_sum_to_zero_on_a_larger_sample():
     frame, spec, design = random_frame()
     _, _, ratios, influence = linearized(0.25, frame, spec, design)
-    for key, column in zip(influence.columns, influence.iter_columns()):
+    for key, column in zip(influence.columns, influence.iter_columns(), strict=True):
         if ratios[key].value is None:
             continue
         assert column.sum() == pytest.approx(0.0, abs=1e-9), key
@@ -105,7 +103,7 @@ def test_influence_of_a_weighted_mean_is_the_centred_deviation():
     matrix, _, ratios, influence = linearized()
     weights = matrix.frame.select(pl.col(WEIGHT)).to_series().to_list()
     poor = [1.0, 1.0, 0.0, 0.0]
-    expected = [n * (y - 0.5) / 20.0 for n, y in zip(weights, poor)]
+    expected = [n * (y - 0.5) / 20.0 for n, y in zip(weights, poor, strict=True)]
     assert influence["H"].to_list() == pytest.approx(expected)
 
 
@@ -131,9 +129,9 @@ def test_influence_reproduces_the_derivative_of_the_ratio(key):
     target = next(item for item in estimands if item.key == key)
     delta = 1e-6
     for row in (0, 17, 55):
-        perturbed = pl.col(WEIGHT) + pl.when(
-            pl.int_range(pl.len()) == row
-        ).then(delta).otherwise(0.0)
+        perturbed = pl.col(WEIGHT) + pl.when(pl.int_range(pl.len()) == row).then(
+            delta
+        ).otherwise(0.0)
         moved = linearization.totals(matrix.frame, (target,), weight=perturbed)[0].value
         observed = moved - ratios[key].value
         predicted = delta * influence[key][row] / weights[row]
@@ -221,7 +219,7 @@ def test_totals_recovered_from_clusters_match_the_direct_totals():
     collapsed = linearization.totals_from_clusters(
         linearization.cluster_sums(matrix.frame, estimands), estimands
     )
-    for one, other in zip(direct, collapsed):
+    for one, other in zip(direct, collapsed, strict=True):
         assert one.numerator == pytest.approx(other.numerator, rel=1e-12)
         assert one.denominator == pytest.approx(other.denominator, rel=1e-12)
 

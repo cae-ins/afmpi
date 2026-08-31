@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import polars as pl
@@ -70,14 +69,18 @@ def apply(frame: pl.DataFrame, spec: Specification) -> tuple[pl.DataFrame, Missi
     per_indicator_df = pl.DataFrame(per_indicator_rows, schema=per_indicator_schema)
 
     policy = spec.missing_policy
-    policy_name = policy if isinstance(policy, str) else getattr(policy, "__name__", str(policy))
+    policy_name = (
+        policy if isinstance(policy, str) else getattr(policy, "__name__", str(policy))
+    )
 
     if isinstance(policy, str):
         if policy == "listwise_deletion":
             complete = pl.all_horizontal([pl.col(item).is_not_null() for item in indicators])
             out_frame = frame.filter(complete)
             contributions = [
-                (pl.col(item).cast(pl.Float64) * weights[item]).alias(contribution_column(index))
+                (pl.col(item).cast(pl.Float64) * weights[item]).alias(
+                    contribution_column(index)
+                )
                 for index, item in enumerate(indicators)
             ]
             g_cols = [
@@ -134,7 +137,9 @@ def apply(frame: pl.DataFrame, spec: Specification) -> tuple[pl.DataFrame, Missi
                 for index, item in enumerate(indicators)
             ]
             contributions = [
-                (pl.col(deprived_column(index)) * weights[item]).alias(contribution_column(index))
+                (pl.col(deprived_column(index)) * weights[item]).alias(
+                    contribution_column(index)
+                )
                 for index, item in enumerate(indicators)
             ]
             obs_cols = [
@@ -211,11 +216,13 @@ def _validate_custom_policy_output(
         if dep_invalid:
             invalid_vals = (
                 frame.select(
-                    pl.col(dep_col).filter(
+                    pl.col(dep_col)
+                    .filter(
                         pl.col(dep_col).is_null()
                         | pl.col(dep_col).is_nan()
                         | ~pl.col(dep_col).is_in([0, 1])
-                    ).unique()
+                    )
+                    .unique()
                 )
                 .to_series()
                 .to_list()
@@ -235,24 +242,27 @@ def _validate_custom_policy_output(
         if obs_invalid:
             invalid_vals = (
                 frame.select(
-                    pl.col(obs_col).filter(
+                    pl.col(obs_col)
+                    .filter(
                         pl.col(obs_col).is_null()
                         | pl.col(obs_col).is_nan()
                         | ~pl.col(obs_col).is_in([0, 1])
-                    ).unique()
+                    )
+                    .unique()
                 )
                 .to_series()
                 .to_list()
             )
             raise ValueError(
-                f"custom missing_policy column {obs_col!r} (observed_ij for indicator {indicator!r}) "
-                f"must contain values in {{0, 1}}; found invalid values: {invalid_vals[:5]}"
+                f"custom missing_policy column {obs_col!r} (observed_ij for "
+                f"indicator {indicator!r}) must contain values in {{0, 1}}; "
+                f"found invalid values: {invalid_vals[:5]}"
             )
 
     c_series = frame.select(
-        pl.sum_horizontal([pl.col(contribution_column(idx)) for idx in range(len(indicators))]).alias(
-            "c"
-        )
+        pl.sum_horizontal(
+            [pl.col(contribution_column(idx)) for idx in range(len(indicators))]
+        ).alias("c")
     ).to_series()
     c_invalid = (
         c_series.is_null().any()

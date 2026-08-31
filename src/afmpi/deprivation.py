@@ -81,9 +81,7 @@ def build(
     if not isinstance(spec, Specification):
         raise TypeError("spec must be a Specification")
     if not isinstance(design, Design):
-        raise TypeError(
-            "design must be a SurveyDesign, ReplicateDesign, CensusDesign or None"
-        )
+        raise TypeError("design must be a SurveyDesign, ReplicateDesign, CensusDesign or None")
 
     indicators = spec.indicators  # also verifies that the specification is configured
     frame_raw, input_kind = backend.to_frame(df)
@@ -155,9 +153,7 @@ def _validate_and_normalize_indicators(
             expression = expression.fill_nan(None)
         invalid = (
             frame.select(
-                expression.filter(
-                    expression.is_not_null() & ~expression.is_in([0, 1])
-                ).unique()
+                expression.filter(expression.is_not_null() & ~expression.is_in([0, 1])).unique()
             )
             .to_series()
             .to_list()
@@ -273,13 +269,21 @@ def _add_design_identifiers(frame: pl.DataFrame, design: Design) -> pl.DataFrame
                 )
             else:
                 prev_psu = pl.col(psu_column(index - 1))
-                stratum_expr = prev_psu + pl.lit("|") + (
-                    pl.col(stage.strata).cast(pl.String).fill_null("__afmpi_null__")
-                    if stage.strata
-                    else pl.lit("")
+                stratum_expr = (
+                    prev_psu
+                    + pl.lit("|")
+                    + (
+                        pl.col(stage.strata).cast(pl.String).fill_null("__afmpi_null__")
+                        if stage.strata
+                        else pl.lit("")
+                    )
                 )
 
-            psu_expr = stratum_expr + pl.lit("|") + pl.col(stage.id).cast(pl.String).fill_null("__afmpi_null__")
+            psu_expr = (
+                stratum_expr
+                + pl.lit("|")
+                + pl.col(stage.id).cast(pl.String).fill_null("__afmpi_null__")
+            )
 
             frame = frame.with_columns(
                 stratum_expr.alias(s_col),
@@ -307,7 +311,9 @@ def _add_design_identifiers(frame: pl.DataFrame, design: Design) -> pl.DataFrame
                         raise ValueError(f"fpc column {stage.fpc!r} mixes values <= 1 and > 1")
                     if has_le_1:
                         if (fpc_series < 0.0).any() or (fpc_series > 1.0).any():
-                            raise ValueError(f"sampling fraction fpc {stage.fpc!r} must be in [0, 1]")
+                            raise ValueError(
+                                f"sampling fraction fpc {stage.fpc!r} must be in [0, 1]"
+                            )
                         frame = frame.with_columns(
                             pl.col(stage.fpc).cast(pl.Float64).fill_null(0.0).alias(f_col)
                         )
@@ -320,7 +326,8 @@ def _add_design_identifiers(frame: pl.DataFrame, design: Design) -> pl.DataFrame
                         if invalid_N.height > 0:
                             row = invalid_N.row(0, named=True)
                             raise ValueError(
-                                f"fpc N={row['__N']} is smaller than the m={row['__m']} sampled units in stratum {row[s_col]!r}"
+                                f"fpc N={row['__N']} is smaller than the m={row['__m']} "
+                                f"sampled units in stratum {row[s_col]!r}"
                             )
                         f_frame = counts.with_columns(
                             (pl.col("__m").cast(pl.Float64) / pl.col("__N")).alias(f_col)
@@ -345,9 +352,28 @@ def _add_design_identifiers(frame: pl.DataFrame, design: Design) -> pl.DataFrame
         if non_const.height > 0:
             psu_val = non_const.row(0, named=True)[PSU]
             raise ValueError(
-                f"inclusion_probability column {pi_name!r} is not constant within PSU {psu_val!r}"
+                f"inclusion_probability column {pi_name!r} is not constant within "
+                f"PSU {psu_val!r}"
             )
 
         frame = frame.with_columns(pi_col.alias(PI))
 
     return frame
+
+
+__all__ = [
+    "DeprivationMatrix",
+    "MissingReport",
+    "PI",
+    "PSU",
+    "SCORE",
+    "STRATUM",
+    "WEIGHT",
+    "build",
+    "contribution_column",
+    "deprived_column",
+    "fraction_column",
+    "observed_column",
+    "psu_column",
+    "stratum_column",
+]

@@ -47,12 +47,16 @@ def test_lonely_conformity():
         for suffix in ["H", "M0", "A"]:
             val = next(v for v in ref["values"] if v["measure"] == f"{suffix}_{pol}")
             row = estimates.filter(pl.col("measure") == suffix).row(0, named=True)
-            assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), f"Mismatch in {suffix}_{pol} est"
+            assert row["est"] == pytest.approx(val["est"], abs=tol["est"]), (
+                f"Mismatch in {suffix}_{pol} est"
+            )
 
             if val["se"] is None:
                 assert np.isnan(row["se"]), f"Expected NaN SE for {suffix}_{pol}"
             else:
-                assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), f"Mismatch in {suffix}_{pol} se"
+                assert row["se"] == pytest.approx(val["se"], abs=tol["se"]), (
+                    f"Mismatch in {suffix}_{pol} se"
+                )
 
             assert row["df"] == val["df"], f"Mismatch in {suffix}_{pol} df"
 
@@ -62,4 +66,7 @@ def test_lonely_stata_mpitb_conformity():
     """Optional comparison to Stata mpitb reference (skipped when Stata JSON absent)."""
     stata_ref = REF_DIR / "lonely_stata.json"
     if not stata_ref.exists():
-        pytest.skip("Stata mpitb reference file lonely_stata.json is not present (PLAN.md §14.10/§14.13)")
+        pytest.skip(
+            "Stata mpitb reference file lonely_stata.json is not present "
+            "(PLAN.md §14.10/§14.13)"
+        )

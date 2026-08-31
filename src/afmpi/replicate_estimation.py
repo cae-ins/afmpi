@@ -28,8 +28,10 @@ def replicate_weight_expressions(
     """One n_i^(r) expression per replicate, in replicate order."""
 
     has_n = frame is not None and WEIGHT in frame.columns
-    base_w = pl.col(WEIGHT) if has_n else (
-        pl.col(design.weights) if design.weights is not None else pl.lit(1.0)
+    base_w = (
+        pl.col(WEIGHT)
+        if has_n
+        else (pl.col(design.weights) if design.weights is not None else pl.lit(1.0))
     )
     if design.household_size is not None and not has_n:
         base_w = base_w * pl.col(design.household_size)
@@ -76,9 +78,11 @@ def generate_replicate_weights(
         strata_col = design.strata
 
         if strata_col is not None:
-            strata_df = frame.select(
-                pl.col(strata_col).cast(pl.String).alias("strata_str")
-            ).unique().sort("strata_str")
+            strata_df = (
+                frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
+                .unique()
+                .sort("strata_str")
+            )
             strata_list = strata_df["strata_str"].to_list()
         else:
             strata_list = ["__afmpi_all__"]
@@ -163,17 +167,17 @@ def generate_replicate_weights(
 
     if design.method == "SDR":
         if design.psu is None:
-            raise ValueError(
-                "psu column must be specified for SDR replicate weight generation"
-            )
+            raise ValueError("psu column must be specified for SDR replicate weight generation")
 
         psu_col = design.psu
         strata_col = design.strata
 
         if strata_col is not None:
-            strata_df = frame.select(
-                pl.col(strata_col).cast(pl.String).alias("strata_str")
-            ).unique().sort("strata_str")
+            strata_df = (
+                frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
+                .unique()
+                .sort("strata_str")
+            )
             strata_list = strata_df["strata_str"].to_list()
         else:
             strata_list = ["__afmpi_all__"]
@@ -305,11 +309,7 @@ def generate_replicate_weights(
         H_df = sylvester(R)
         H_mat = H_df.to_numpy()
 
-        rho = (
-            design.fay
-            if (design.method == "Fay_BRR" and design.fay is not None)
-            else 0.0
-        )
+        rho = design.fay if (design.method == "Fay_BRR" and design.fay is not None) else 0.0
         if design.method == "Fay_BRR" and design.fay is None:
             rho = 0.5
 
@@ -342,12 +342,7 @@ def generate_replicate_weights(
                 combined_sel = combined_sel | c
 
             if design.method == "BRR":
-                expr = (
-                    pl.when(combined_sel)
-                    .then(base_w * 2.0)
-                    .otherwise(0.0)
-                    .alias(col_name)
-                )
+                expr = pl.when(combined_sel).then(base_w * 2.0).otherwise(0.0).alias(col_name)
             else:
                 expr = (
                     pl.when(combined_sel)
@@ -376,9 +371,11 @@ def generate_replicate_weights(
             raise ValueError("psu column must be specified for JK1 replicate weight generation")
 
         psu_col = design.psu
-        psu_df = frame.select(
-            pl.col(psu_col).cast(pl.String).alias("psu_str")
-        ).unique().sort("psu_str")
+        psu_df = (
+            frame.select(pl.col(psu_col).cast(pl.String).alias("psu_str"))
+            .unique()
+            .sort("psu_str")
+        )
         psu_list = psu_df["psu_str"].to_list()
         m = len(psu_list)
         if m < 2:
@@ -416,9 +413,11 @@ def generate_replicate_weights(
     strata_col = design.strata
 
     if strata_col is not None:
-        strata_df = frame.select(
-            pl.col(strata_col).cast(pl.String).alias("strata_str")
-        ).unique().sort("strata_str")
+        strata_df = (
+            frame.select(pl.col(strata_col).cast(pl.String).alias("strata_str"))
+            .unique()
+            .sort("strata_str")
+        )
         strata_list = strata_df["strata_str"].to_list()
     else:
         strata_list = ["__afmpi_all__"]
@@ -477,7 +476,8 @@ def generate_replicate_weights(
 
     if design.rscales is not None and len(design.rscales) != len(col_names):
         raise ValueError(
-            f"rscales length ({len(design.rscales)}) must match number of replicates ({len(col_names)})"
+            f"rscales length ({len(design.rscales)}) must match number of replicates "
+            f"({len(col_names)})"
         )
 
     scale = 1.0 if design.scale is None else design.scale
@@ -597,9 +597,7 @@ def replicate_variance(
         else:
             theta_c = sum(theta_r_list) / R
 
-        var_val = scale * sum(
-            rscales[r] * ((theta_r_list[r] - theta_c) ** 2) for r in range(R)
-        )
+        var_val = scale * sum(rscales[r] * ((theta_r_list[r] - theta_c) ** 2) for r in range(R))
         variances[key] = float(var_val)
 
     return variances
@@ -674,4 +672,3 @@ def replicate_vcov(
                 vcov[(k1, k2)] = float(val)
 
     return vcov
-

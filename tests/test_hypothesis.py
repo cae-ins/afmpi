@@ -1,6 +1,7 @@
 """Tests for hypothesis testing and degrees of freedom (PLAN.md §14.7)."""
 
-from math import isnan, sqrt
+from math import sqrt
+
 import numpy as np
 import polars as pl
 import pytest
@@ -8,8 +9,6 @@ from scipy import stats
 
 from afmpi import (
     Design,
-    DesignDegrees,
-    HypothesisTest,
     PPSDesign,
     ReplicateDesign,
     Specification,
@@ -36,22 +35,28 @@ class DummyCensusDesign(Design):
 @pytest.fixture
 def test3_data():
     """Exact dataset for hand-calculation test #3.
-    
+
     Stratum 1:
-      PSU 101 (group A, 2 obs): obs 1 (i1=1, i2=1 -> c_i=1.0), obs 2 (i1=1, i2=1 -> c_i=1.0). Sum = 2.0
-      PSU 102 (group B, 2 obs): obs 1 (i1=1, i2=1 -> c_i=1.0), obs 2 (i1=1, i2=0 -> c_i=0.5). Sum = 1.5
+      PSU 101 (group A, 2 obs): obs 1 (i1=1, i2=1 -> c_i=1.0),
+                                obs 2 (i1=1, i2=1 -> c_i=1.0). Sum = 2.0
+      PSU 102 (group B, 2 obs): obs 1 (i1=1, i2=1 -> c_i=1.0),
+                                obs 2 (i1=1, i2=0 -> c_i=0.5). Sum = 1.5
     Stratum 2:
-      PSU 201 (group A, 2 obs): obs 1 (i1=1, i2=0 -> c_i=0.5), obs 2 (i1=0, i2=0 -> c_i=0.0). Sum = 0.5
-      PSU 202 (group B, 2 obs): obs 1 (i1=0, i2=0 -> c_i=0.0), obs 2 (i1=0, i2=0 -> c_i=0.0). Sum = 0.0
+      PSU 201 (group A, 2 obs): obs 1 (i1=1, i2=0 -> c_i=0.5),
+                                obs 2 (i1=0, i2=0 -> c_i=0.0). Sum = 0.5
+      PSU 202 (group B, 2 obs): obs 1 (i1=0, i2=0 -> c_i=0.0),
+                                obs 2 (i1=0, i2=0 -> c_i=0.0). Sum = 0.0
     """
-    return pl.DataFrame({
-        "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
-        "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
-        "weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "group": ["A", "A", "B", "B", "A", "A", "B", "B"],
-        "i1": [1, 1, 1, 1, 1, 0, 0, 0],
-        "i2": [1, 1, 1, 0, 0, 0, 0, 0],
-    })
+    return pl.DataFrame(
+        {
+            "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
+            "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
+            "weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "group": ["A", "A", "B", "B", "A", "A", "B", "B"],
+            "i1": [1, 1, 1, 1, 1, 0, 0, 0],
+            "i2": [1, 1, 1, 0, 0, 0, 0, 0],
+        }
+    )
 
 
 @pytest.fixture
@@ -80,7 +85,7 @@ def test_hand_calculated_wald_test(test3_data, spec1):
 
     expected_estimate = 0.25
     expected_var = 0.28125
-    expected_se = sqrt(0.28125)
+    expected_se = sqrt(expected_var)
     expected_F = 2.0 / 9.0
     expected_p_val = float(stats.f.sf(expected_F, 1, 2))
 
@@ -93,7 +98,7 @@ def test_hand_calculated_wald_test(test3_data, spec1):
 
     # Verify t**2 == F exactly
     t_stat = test_res.estimate / test_res.se
-    np.testing.assert_allclose(t_stat ** 2, test_res.statistic, atol=1e-12)
+    np.testing.assert_allclose(t_stat**2, test_res.statistic, atol=1e-12)
 
     # Verify Student t two-tailed p-value matches F p-value exactly
     t_p_val = float(stats.t.sf(abs(t_stat), df=2) * 2.0)
@@ -139,7 +144,7 @@ def test_single_term_test(test3_data, spec1):
     test_res = res.test(("group", "A"), b=None, measure="M0")
     assert test_res.estimate == pytest.approx(0.625, abs=1e-12)
     assert test_res.se == pytest.approx(sqrt(0.0703125), abs=1e-12)
-    expected_F = (0.625 ** 2) / 0.0703125  # 50 / 9
+    expected_F = (0.625**2) / 0.0703125  # 50 / 9
     assert test_res.statistic == pytest.approx(expected_F, abs=1e-12)
 
 
@@ -147,14 +152,17 @@ def test_single_term_test(test3_data, spec1):
 # 11-Row Normative Degrees of Freedom Table Tests
 # -----------------------------------------------------------------------------
 
+
 def test_df_case_1_single_stage():
     """Row 1: Single stage design -> df = #PSU - #strata."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2", "2"],
-        "psu": ["101", "102", "201", "202"],
-        "weight": [1.0, 1.0, 1.0, 1.0],
-        "i1": [1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2", "2"],
+            "psu": ["101", "102", "201", "202"],
+            "weight": [1.0, 1.0, 1.0, 1.0],
+            "i1": [1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
     res = estimate(df, spec, design)
@@ -163,13 +171,15 @@ def test_df_case_1_single_stage():
 
 def test_df_case_2_multistage():
     """Row 2: Multi-stage design -> stage 1 only counts (#PSU - #strata)."""
-    df = pl.DataFrame({
-        "s1": ["1", "1", "1", "1", "2", "2", "2", "2"],
-        "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
-        "ssu": ["a", "b", "c", "d", "e", "f", "g", "h"],
-        "weight": [1.0] * 8,
-        "i1": [1, 0, 1, 0, 1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "s1": ["1", "1", "1", "1", "2", "2", "2", "2"],
+            "psu": ["101", "101", "102", "102", "201", "201", "202", "202"],
+            "ssu": ["a", "b", "c", "d", "e", "f", "g", "h"],
+            "weight": [1.0] * 8,
+            "i1": [1, 0, 1, 0, 1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     stages = (Stage(id="psu", strata="s1"), Stage(id="ssu"))
     design = SurveyDesign(stages=stages, weights="weight")
@@ -179,13 +189,15 @@ def test_df_case_2_multistage():
 
 def test_df_case_3_domain_subgroup():
     """Row 3: Domain or subgroup -> design clusters count, even if empty on domain."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
-        "psu": ["101", "102", "103", "104", "201", "202", "203", "204"],
-        "region": ["A", "A", "B", "B", "A", "A", "B", "B"],
-        "weight": [1.0] * 8,
-        "i1": [1, 0, 1, 0, 1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "1", "1", "2", "2", "2", "2"],
+            "psu": ["101", "102", "103", "104", "201", "202", "203", "204"],
+            "region": ["A", "A", "B", "B", "A", "A", "B", "B"],
+            "weight": [1.0] * 8,
+            "i1": [1, 0, 1, 0, 1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
     res = estimate(df, spec, design, over="region")
@@ -196,13 +208,17 @@ def test_df_case_3_domain_subgroup():
 
 
 def test_df_case_4_lonely_certainty():
-    """Row 4: Lonely PSU lonely_psu='certainty' -> stratum and cluster removed from both counts."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2"],
-        "psu": ["101", "102", "201"],  # stratum 2 has 1 PSU
-        "weight": [1.0, 1.0, 1.0],
-        "i1": [1, 0, 1],
-    })
+    """Row 4: Lonely PSU lonely_psu='certainty' -> stratum and cluster
+    removed from both counts.
+    """
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2"],
+            "psu": ["101", "102", "201"],  # stratum 2 has 1 PSU
+            "weight": [1.0, 1.0, 1.0],
+            "i1": [1, 0, 1],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight", lonely_psu="certainty")
     res = estimate(df, spec, design)
@@ -212,12 +228,14 @@ def test_df_case_4_lonely_certainty():
 
 def test_df_case_5_lonely_adjust_average():
     """Row 5: Lonely PSU 'adjust' / 'average' -> counted normally."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2"],
-        "psu": ["101", "102", "201"],
-        "weight": [1.0, 1.0, 1.0],
-        "i1": [1, 0, 1],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2"],
+            "psu": ["101", "102", "201"],
+            "weight": [1.0, 1.0, 1.0],
+            "i1": [1, 0, 1],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight", lonely_psu="adjust")
     res = estimate(df, spec, design)
@@ -227,12 +245,14 @@ def test_df_case_5_lonely_adjust_average():
 
 def test_df_case_6_lonely_collapse():
     """Row 6: Lonely PSU 'collapse' -> counted on merged stratification."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2"],
-        "psu": ["101", "102", "201"],
-        "weight": [1.0, 1.0, 1.0],
-        "i1": [1, 0, 1],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2"],
+            "psu": ["101", "102", "201"],
+            "weight": [1.0, 1.0, 1.0],
+            "i1": [1, 0, 1],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight", lonely_psu="collapse")
     res = estimate(df, spec, design)
@@ -242,12 +262,14 @@ def test_df_case_6_lonely_collapse():
 
 def test_df_case_7_pps():
     """Row 7: PPS -> unchanged (#PSU - #strata)."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2", "2"],
-        "psu": ["101", "102", "201", "202"],
-        "weight": [1.0, 1.0, 1.0, 1.0],
-        "i1": [1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2", "2"],
+            "psu": ["101", "102", "201", "202"],
+            "weight": [1.0, 1.0, 1.0, 1.0],
+            "i1": [1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     pps = PPSDesign(method="with_replacement")
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight", pps=pps)
@@ -257,12 +279,14 @@ def test_df_case_7_pps():
 
 def test_df_case_8_replication():
     """Row 8: Replication -> see §14.5a table (R - 1 or H)."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2", "2"],
-        "psu": ["101", "102", "201", "202"],
-        "weight": [1.0, 1.0, 1.0, 1.0],
-        "i1": [1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2", "2"],
+            "psu": ["101", "102", "201", "202"],
+            "weight": [1.0, 1.0, 1.0, 1.0],
+            "i1": [1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design_jk1 = ReplicateDesign(psu="psu", weights="weight", method="JK1")
     res_jk1 = estimate(df, spec, design_jk1)
@@ -277,10 +301,12 @@ def test_df_case_8_replication():
 
 def test_df_case_9_census():
     """Row 9: Census -> df = 0."""
-    df = pl.DataFrame({
-        "weight": [1.0, 1.0, 1.0, 1.0],
-        "i1": [1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "weight": [1.0, 1.0, 1.0, 1.0],
+            "i1": [1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = DummyCensusDesign()
     res = estimate(df, spec, design)
@@ -289,13 +315,15 @@ def test_df_case_9_census():
 
 def test_df_case_10_change_over_time():
     """Row 10: Change over time -> df of combined two-wave design."""
-    df = pl.DataFrame({
-        "year": ["2020", "2020", "2020", "2020", "2021", "2021", "2021", "2021"],
-        "stratum": ["1", "1", "2", "2", "1", "1", "2", "2"],
-        "psu": ["101", "102", "201", "202", "103", "104", "203", "204"],
-        "weight": [1.0] * 8,
-        "i1": [1, 0, 1, 0, 1, 1, 0, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "year": ["2020", "2020", "2020", "2020", "2021", "2021", "2021", "2021"],
+            "stratum": ["1", "1", "2", "2", "1", "1", "2", "2"],
+            "psu": ["101", "102", "201", "202", "103", "104", "203", "204"],
+            "weight": [1.0] * 8,
+            "i1": [1, 0, 1, 0, 1, 1, 0, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = SurveyDesign(strata="stratum", psu="psu", weights="weight")
     res = estimate(df, spec, design, tvar="year")
@@ -307,12 +335,14 @@ def test_df_case_10_change_over_time():
 
 def test_df_case_11_override_degf():
     """Row 11: degf= provided -> the provided value in all cases."""
-    df = pl.DataFrame({
-        "stratum": ["1", "1", "2", "2"],
-        "psu": ["101", "102", "201", "202"],
-        "weight": [1.0, 1.0, 1.0, 1.0],
-        "i1": [1, 0, 1, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "stratum": ["1", "1", "2", "2"],
+            "psu": ["101", "102", "201", "202"],
+            "weight": [1.0, 1.0, 1.0, 1.0],
+            "i1": [1, 0, 1, 0],
+        }
+    )
     spec = Specification(dimensions={"d": ("i1",)})
     design = ReplicateDesign(psu="psu", weights="weight", method="JK1", degf=42)
     res = estimate(df, spec, design)
@@ -336,4 +366,3 @@ def test_wald_oracle_r_survey_validation(test3_data, spec1):
     assert test_res.df1 == 1
     assert test_res.df2 == 2
     assert test_res.p_value == pytest.approx(0.68377223398316, abs=1e-12)
-

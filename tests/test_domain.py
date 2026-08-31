@@ -38,23 +38,16 @@ def sample(seed=91, rows=400):
     generator = random.Random(seed)
     frame = pl.DataFrame(
         {
-            **{
-                f"i{j}": [generator.randint(0, 1) for _ in range(rows)]
-                for j in range(4)
-            },
+            **{f"i{j}": [generator.randint(0, 1) for _ in range(rows)] for j in range(4)},
             "w": [round(generator.uniform(0.5, 2.5), 4) for _ in range(rows)],
             "size": [generator.randint(1, 9) for _ in range(rows)],
             "psu": [generator.randint(1, 40) for _ in range(rows)],
             "stratum": [generator.randint(1, 5) for _ in range(rows)],
-            "region": [
-                generator.choice(["north", "south", "east"]) for _ in range(rows)
-            ],
+            "region": [generator.choice(["north", "south", "east"]) for _ in range(rows)],
             "milieu": [generator.choice(["urban", "rural"]) for _ in range(rows)],
         }
     )
-    design = SurveyDesign(
-        weights="w", household_size="size", strata="stratum", psu="psu"
-    )
+    design = SurveyDesign(weights="w", household_size="size", strata="stratum", psu="psu")
     return frame, design
 
 
@@ -63,9 +56,7 @@ def row_of(result, measure, over=None, subgroup=None):
     if over is None:
         frame = frame.filter(pl.col("over").is_null())
     else:
-        frame = frame.filter(
-            (pl.col("over") == over) & (pl.col("subgroup") == subgroup)
-        )
+        frame = frame.filter((pl.col("over") == over) & (pl.col("subgroup") == subgroup))
     return frame.row(0, named=True)
 
 
@@ -76,17 +67,13 @@ def test_domain_matches_a_filter_on_the_estimate_but_not_on_the_error():
     frame, design = sample()
     whole = estimate(frame, SPEC, design, k=1 / 3)
     domain = whole.domain("region == 'north'")
-    filtered = estimate(
-        frame.filter(pl.col("region") == "north"), SPEC, design, k=1 / 3
-    )
+    filtered = estimate(frame.filter(pl.col("region") == "north"), SPEC, design, k=1 / 3)
 
     for measure in ("H", "A", "M0"):
         assert row_of(domain, measure)["est"] == pytest.approx(
             row_of(filtered, measure)["est"], rel=1e-12
         )
-    assert row_of(domain, "M0")["se"] != pytest.approx(
-        row_of(filtered, "M0")["se"], rel=1e-9
-    )
+    assert row_of(domain, "M0")["se"] != pytest.approx(row_of(filtered, "M0")["se"], rel=1e-9)
 
 
 def test_filtering_can_destroy_a_variance_that_the_domain_keeps():
@@ -202,9 +189,7 @@ def test_unknown_or_duplicated_over_variables_are_refused():
 # --------------------------------------------------------------------------- #
 def test_decomposability_is_verified_for_every_over_variable_and_cutoff():
     frame, design = sample(seed=97)
-    result = estimate(
-        frame, SPEC, design, k=[0.2, 1 / 3, 0.5], over=["region", "milieu"]
-    )
+    result = estimate(frame, SPEC, design, k=[0.2, 1 / 3, 0.5], over=["region", "milieu"])
     audit = result.decomposition()
     assert audit.height == 6
     assert audit["shares"].to_list() == pytest.approx([1.0] * 6, abs=1e-12)
@@ -250,12 +235,10 @@ def test_a_list_of_cutoffs_reproduces_one_call_per_cutoff():
 def test_incidence_and_M0_never_increase_with_the_cutoff():
     frame, design = sample(seed=100)
     result = estimate(frame, SPEC, design, k=[0.0, 0.2, 1 / 3, 0.5, 0.75, 1.0])
+
     def series(measure):
         return (
-            result.estimates()
-            .filter(pl.col("measure") == measure)
-            .sort("k")["est"]
-            .to_list()
+            result.estimates().filter(pl.col("measure") == measure).sort("k")["est"].to_list()
         )
 
     # Ties are expected: with four equally weighted indicators the scores live on
@@ -264,12 +247,15 @@ def test_incidence_and_M0_never_increase_with_the_cutoff():
         values = series(measure)
         assert all(
             later <= earlier + 1e-12
-            for earlier, later in zip(values, values[1:])
-        ), (measure, values)
+            for earlier, later in zip(values, values[1:], strict=False)
+        ), (
+            measure,
+            values,
+        )
     intensity = series("A")
     assert all(
         later >= earlier - 1e-12
-        for earlier, later in zip(intensity, intensity[1:])
+        for earlier, later in zip(intensity, intensity[1:], strict=False)
     ), intensity
     assert series("H")[0] == pytest.approx(1.0)
 
