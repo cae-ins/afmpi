@@ -294,6 +294,24 @@ Une suite exhaustive de 358 tests vérifie la co-ïncidence numérique contre le
 - Limites de données (poids extrêmes, politiques de valeurs manquantes) ;
 - Sous-populations et domaines sans rupture de plan.
 
+**Important : cette suite de conformité valide le moteur en mémoire (`memory`), pas
+automatiquement le chemin `lazy`/`streaming`.** Une relecture indépendante a montré que le chemin
+lazy/streaming (phase 9) ne reproduit pas encore toutes les capacités du moteur en mémoire — les
+combinaisons suivantes ne sont **pas supportées** sur ce chemin et lèvent explicitement
+`NotImplementedError` plutôt que de renvoyer un résultat silencieusement faux :
+
+| Combinaison sur `lazy=True` / `streaming=True` / `from_parquet(...)` | Pourquoi |
+|---|---|
+| `Specification(missing_policy=...)` autre que `"listwise_deletion"` | Le chemin lazy filtre toujours les valeurs manquantes en listwise ; `"reweighting"`/`"treat_as_nondeprived"`/personnalisée y sont ignorées silencieusement dans les versions antérieures à ce correctif. |
+| `domain=...` avec `SurveyDesign`/`ReplicateDesign` | Le chemin lazy filtrait physiquement les lignes hors domaine au lieu de les pondérer à zéro, ce qui fausse `df`/`se` (structure de grappes/strates amputée). Fonctionne pour `CensusDesign` (`se=0` de toute façon). |
+| `Stage(fpc=...)` | La correction de population finie était remplacée silencieusement par `f=0` sur le chemin lazy. |
+| `SurveyDesign(pps=...)` | Les probabilités d'inclusion PPS ne sont pas transportées sur le chemin lazy. |
+| `ReplicateDesign` | Aucun chemin lazy dédié : retomberait sur la linéarisation de Taylor au lieu de la variance par réplicats. |
+
+Ces cas fonctionnent correctement sur le chemin en mémoire (`estimate()` sans `lazy=True`/
+`streaming=True`, sans `from_parquet(...)`). Voir `CHANGELOG.md` pour le détail de cette
+correction et la feuille de route de mise à parité complète.
+
 ## Attribution et licence
 
 Les définitions méthodologiques et les contrôles de parité s'appuient sur le toolbox

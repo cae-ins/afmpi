@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "afmpi"
-version = "1.0.0"
+version = "1.0.1"
 description = "Alkire-Foster multidimensional poverty measurement with a Polars-native engine"
 readme = "README.md"
 requires-python = ">=3.10"

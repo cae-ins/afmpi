@@ -16,8 +16,10 @@ import afmpi.estimation as estimation_module
 from afmpi import (
     CensusDesign,
     ExecutionConfig,
+    PPSDesign,
     ReplicateDesign,
     Specification,
+    Stage,
     SurveyDesign,
     estimate,
     from_parquet,
@@ -271,3 +273,61 @@ def test_full_10m_census_benchmark(tmp_path: Path):
     )
 
     assert t_elapsed < 300.0, f"Benchmark elapsed time {t_elapsed:.2f}s exceeded 300s target"
+
+
+# -----------------------------------------------------------------------------
+# Known gaps between the eager and lazy/streaming paths (PLAN.md §14.9): each must
+# fail loudly with NotImplementedError rather than silently return a wrong estimate.
+# -----------------------------------------------------------------------------
+
+
+def test_lazy_rejects_non_listwise_missing_policy(sample_df: pl.DataFrame) -> None:
+    spec = Specification(
+        dimensions={"d1": ["ind1", "ind2", "ind3"]}, missing_policy="reweighting"
+    )
+    design = SurveyDesign(weights="weight", psu="psu")
+    with pytest.raises(NotImplementedError, match="missing_policy"):
+        estimate(sample_df, spec, design, k=0.33, lazy=True).collect()
+
+
+def test_lazy_rejects_domain_on_survey_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
+    design = SurveyDesign(weights="weight", psu="psu")
+    with pytest.raises(NotImplementedError, match="domain"):
+        estimate(
+            sample_df, spec, design, k=0.33, lazy=True, domain="region == 'North'"
+        ).collect()
+
+
+def test_lazy_allows_domain_on_census_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
+    design = CensusDesign(weights="weight")
+    res = estimate(sample_df, spec, design, k=0.33, lazy=True, domain="region == 'North'")
+    if hasattr(res, "collect"):
+        res = res.collect()
+    assert res.M0 is not None
+
+
+def test_lazy_rejects_stage_fpc(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
+    df = sample_df.with_columns(pl.lit(0.1).alias("fpc1"))
+    design = SurveyDesign(stages=[Stage(id="psu", fpc="fpc1")])
+    with pytest.raises(NotImplementedError, match="fpc"):
+        estimate(df, spec, design, k=0.33, lazy=True).collect()
+
+
+def test_lazy_rejects_pps_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
+    df = sample_df.with_columns((pl.col("psu").cast(pl.Float64) / 100).alias("pi"))
+    design = SurveyDesign(
+        psu="psu", pps=PPSDesign(method="without_replacement", inclusion_probability="pi")
+    )
+    with pytest.raises(NotImplementedError, match="PPS"):
+        estimate(df, spec, design, k=0.33, lazy=True).collect()
+
+
+def test_lazy_rejects_replicate_design(sample_df: pl.DataFrame) -> None:
+    spec = Specification(dimensions={"d1": ["ind1", "ind2", "ind3"]})
+    design = ReplicateDesign(weights="weight", psu="psu", method="bootstrap", replicates=10)
+    with pytest.raises(NotImplementedError, match="ReplicateDesign"):
+        estimate(sample_df, spec, design, k=0.33, lazy=True).collect()

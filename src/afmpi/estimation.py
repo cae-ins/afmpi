@@ -325,10 +325,60 @@ def _estimate_lazy(
 ) -> EstimationResult:
     lf = frame_obj.lazy() if isinstance(frame_obj, pl.DataFrame) else frame_obj
 
+    # Known limitations of the lazy/streaming path (PLAN.md §14.9): the shared single-plan
+    # design does not yet replicate everything the in-memory path supports. Rather than
+    # silently returning a wrong estimate (listwise deletion instead of the requested missing
+    # policy, physically dropped rows instead of a zero-weighted domain, ignored FPC/PPS
+    # correction, or a Taylor-style variance mistakenly applied to replicate weights), each gap
+    # raises explicitly here. Remove a check only once the corresponding code path is actually
+    # implemented and covered by the conformity suite (tests/test_conformity/).
+    if isinstance(design, ReplicateDesign):
+        raise NotImplementedError(
+            "ReplicateDesign has no dedicated lazy/streaming execution path yet -- the shared "
+            "plan machinery would silently apply Taylor linearization instead of replicate-"
+            "weight variance. Re-run estimate() without lazy=True/streaming=True and without "
+            "from_parquet(...) streaming for ReplicateDesign."
+        )
+
+    if spec.missing_policy != "listwise_deletion":
+        raise NotImplementedError(
+            f"The lazy/streaming path only supports missing_policy='listwise_deletion' today; "
+            f"spec.missing_policy={spec.missing_policy!r} requires the in-memory path -- "
+            "re-run estimate() without lazy=True/streaming=True and without from_parquet(...) "
+            "streaming."
+        )
+
+    if isinstance(design, SurveyDesign):
+        if design.pps is not None:
+            raise NotImplementedError(
+                "PPS designs (design.pps=...) are not yet supported on the lazy/streaming "
+                "path -- inclusion probabilities would be silently dropped. Re-run estimate() "
+                "without lazy=True/streaming=True and without from_parquet(...) streaming."
+            )
+        fpc_stages = [st for st in design.resolved_stages if st.fpc is not None]
+        if fpc_stages:
+            raise NotImplementedError(
+                "Stage(fpc=...) is not yet supported on the lazy/streaming path -- the finite "
+                "population correction would be silently replaced by f=0. Re-run estimate() "
+                "without lazy=True/streaming=True and without from_parquet(...) streaming."
+            )
+
+    if domain is not None and not isinstance(design, CensusDesign):
+        raise NotImplementedError(
+            "domain=... on the lazy/streaming path is only supported for CensusDesign today -- "
+            "SurveyDesign/ReplicateDesign domain estimation requires zero-weighting out-of-"
+            "domain rows to preserve the design's cluster/stratum structure for variance, not "
+            "physically dropping them. Re-run estimate() without lazy=True/streaming=True and "
+            "without from_parquet(...) streaming, or use result.domain(...) after an in-memory "
+            "estimate()."
+        )
+
     if domain is not None:
         if isinstance(domain, str):
             # Same reading as the eager path (domain_module.from_expression):
-            # a string domain is always a SQL-flavoured boolean expression.
+            # a string domain is always a SQL-flavoured boolean expression. Safe here: only
+            # CensusDesign reaches this point (guarded above), where filtering and
+            # zero-weighting are equivalent since se=0 regardless.
             lf = lf.filter(pl.sql_expr(domain))
         elif isinstance(domain, pl.Expr):
             lf = lf.filter(domain)

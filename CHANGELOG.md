@@ -9,6 +9,46 @@ Conformément à la discipline méthodologique du projet, tout écart numérique
 
 ---
 
+## [1.0.1] - 2026-08-31
+
+### Fixed
+- **Cinq écarts de correction statistique silencieux sur le chemin `lazy`/`streaming`**,
+  identifiés par une relecture indépendante immédiatement après la publication de `v1.0.0` et
+  vérifiés un par un directement dans le code (`src/afmpi/estimation.py`) :
+  - `Specification(missing_policy=...)` autre que `"listwise_deletion"` : ignorée en silence sur
+    le chemin lazy (toujours listwise), quelle que soit la politique demandée.
+  - `domain=...` avec `SurveyDesign`/`ReplicateDesign` : les lignes hors domaine étaient
+    physiquement filtrées (`lf.filter(...)`) au lieu d'être pondérées à zéro, ce qui ampute la
+    structure de grappes/strates et fausse `df`/`se` -- correct uniquement pour `CensusDesign`.
+  - `Stage(fpc=...)` : la fraction de sondage était remplacée par une constante `f=0.0` au lieu de
+    lire la colonne FPC réelle, supprimant silencieusement la correction de population finie.
+  - `SurveyDesign(pps=...)` : les probabilités d'inclusion PPS n'étaient pas transportées vers le
+    chemin lazy.
+  - `ReplicateDesign` : aucun chemin lazy dédié -- retombait sur la linéarisation de Taylor
+    (méthode incorrecte pour une variance par réplicats) sans avertissement.
+  - Chacun des cinq cas lève désormais explicitement `NotImplementedError` avec un message
+    actionnable, plutôt que de renvoyer un résultat numériquement faux sans le signaler. Cinq
+    tests de régression ajoutés (`tests/test_performance_scale.py`) verrouillent ce comportement.
+  - **Aucun de ces cas n'était couvert par la suite de conformité de la phase 10** : celle-ci
+    valide le moteur en mémoire, pas le chemin lazy/streaming -- les 365 tests rapides passaient
+    déjà avant ce correctif, confirmant qu'il s'agissait d'angles morts non testés plutôt que de
+    régressions détectées.
+
+### Known limitations (non résolu dans cette version)
+- Le chemin lazy/streaming ne couvre donc, pour l'instant, que `SurveyDesign`/`CensusDesign`
+  sans FPC ni PPS, avec la politique de valeurs manquantes par défaut, et sans domaine hors
+  `CensusDesign`. Une mise à parité complète (implémentation correcte plutôt que rejet explicite,
+  pour chacun des cinq cas) et une stratégie de ressources CPU/RAM garantie (`ExecutionConfig`
+  reste best-effort, voir `v1.0.0`) restent à faire.
+- Le classificateur PyPI `Development Status :: 5 - Production/Stable` (`pyproject.toml`) est
+  maintenu tel quel : le moteur central Alkire-Foster/plan de sondage en mémoire, qui est la
+  proposition de valeur principale du paquet, est mature et couvert par la conformité statistique
+  complète. Le chemin lazy/streaming à grande échelle (phase 9), plus récent, est fonctionnel mais
+  moins mature -- désormais documenté comme tel explicitement dans le `README.md` plutôt que
+  présenté comme équivalent.
+
+---
+
 ## [1.0.0] - 2026-08-31
 
 ### Added
