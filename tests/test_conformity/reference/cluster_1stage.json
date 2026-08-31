@@ -1,0 +1,42 @@
+{
+  "design": "cluster_1stage",
+  "generator": "tests/test_conformity/generate.py::generate_cluster_1stage",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/cluster_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.590912398129372,
+      "se": 0.0580526633249313,
+      "df": 7
+    },
+    {
+      "measure": "M0",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.340795566326503,
+      "se": 0.0362548519462291,
+      "df": 7
+    },
+    {
+      "measure": "A",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.57672773054914,
+      "se": 0.0160922519723328,
+      "df": 7
+    }
+  ]
+}

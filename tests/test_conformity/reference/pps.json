@@ -1,0 +1,123 @@
+{
+  "design": "pps",
+  "generator": "tests/test_conformity/generate.py::generate_pps",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/pps_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H_wr",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.833333333333333,
+      "se": 0.170957612924905,
+      "df": 2
+    },
+    {
+      "measure": "M0_wr",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.511904761904762,
+      "se": 0.121248948790271,
+      "df": 2
+    },
+    {
+      "measure": "A_wr",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.614285714285714,
+      "se": 0.0230675447362364,
+      "df": 2
+    },
+    {
+      "measure": "H_syg",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.833333333333333,
+      "se": 0.131851172427271,
+      "df": 2
+    },
+    {
+      "measure": "M0_syg",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.511904761904762,
+      "se": 0.0936799959480607,
+      "df": 2
+    },
+    {
+      "measure": "A_syg",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.614285714285714,
+      "se": 0.0178384742064961,
+      "df": 2
+    },
+    {
+      "measure": "H_hajek",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.833333333333333,
+      "se": 0.140340647164382,
+      "df": 2
+    },
+    {
+      "measure": "M0_hajek",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.511904761904762,
+      "se": 0.0998919343634328,
+      "df": 2
+    },
+    {
+      "measure": "A_hajek",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.614285714285714,
+      "se": 0.0190384678836355,
+      "df": 2
+    },
+    {
+      "measure": "H_brewer",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.833333333333333,
+      "se": 0.129482573848167,
+      "df": 2
+    },
+    {
+      "measure": "M0_brewer",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.518518518518518,
+      "se": 0.0854883314867273,
+      "df": 2
+    },
+    {
+      "measure": "A_brewer",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.622222222222222,
+      "se": 0.0148610389983251,
+      "df": 2
+    }
+  ]
+}

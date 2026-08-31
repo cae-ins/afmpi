@@ -1,0 +1,42 @@
+{
+  "design": "stratified_srs",
+  "generator": "tests/test_conformity/generate.py::generate_stratified_srs",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/srs_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.604343700257132,
+      "se": 0.048961489435544,
+      "df": 117
+    },
+    {
+      "measure": "M0",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.393047190675891,
+      "se": 0.03361569291281,
+      "df": 117
+    },
+    {
+      "measure": "A",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.650370295096415,
+      "se": 0.0182598107134034,
+      "df": 117
+    }
+  ]
+}

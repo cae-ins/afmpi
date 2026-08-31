@@ -1,0 +1,123 @@
+{
+  "design": "data_limits",
+  "generator": "tests/test_conformity/generate.py::generate_data_limits",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/data_limits_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H_ext",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.999999393940312,
+      "se": 6.4931628135819e-07,
+      "df": 2
+    },
+    {
+      "measure": "M0_ext",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.537878503214389,
+      "se": 0.0436781667850354,
+      "df": 2
+    },
+    {
+      "measure": "A_ext",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.537878829201064,
+      "se": 0.0436782607509054,
+      "df": 2
+    },
+    {
+      "measure": "H_lw",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.865671641791045,
+      "se": 0.131561833324755,
+      "df": 2
+    },
+    {
+      "measure": "M0_lw",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.541044776119403,
+      "se": 0.124289580802217,
+      "df": 2
+    },
+    {
+      "measure": "A_lw",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.625,
+      "se": 0.0684924507847875,
+      "df": 2
+    },
+    {
+      "measure": "H_tan",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.712,
+      "se": 0.0618678436669648,
+      "df": 2
+    },
+    {
+      "measure": "M0_tan",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.414,
+      "se": 0.0646791366670892,
+      "df": 2
+    },
+    {
+      "measure": "A_tan",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.581460674157303,
+      "se": 0.055915471752051,
+      "df": 2
+    },
+    {
+      "measure": "H_rw",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.794642857142857,
+      "se": 0.0229353662246158,
+      "df": 2
+    },
+    {
+      "measure": "M0_rw",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.508184523809524,
+      "se": 0.0318599657690365,
+      "df": 2
+    },
+    {
+      "measure": "A_rw",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.639513108614232,
+      "se": 0.0408828499627184,
+      "df": 2
+    }
+  ]
+}

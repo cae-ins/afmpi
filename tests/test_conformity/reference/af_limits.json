@@ -1,0 +1,114 @@
+{
+  "design": "af_limits",
+  "generator": "tests/test_conformity/generate.py::generate_af_limits",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/af_limits_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H_zero",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0,
+      "se": 0,
+      "df": 2
+    },
+    {
+      "measure": "M0_zero",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0,
+      "se": 0,
+      "df": 2
+    },
+    {
+      "measure": "H_all",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 1,
+      "se": 0,
+      "df": 2
+    },
+    {
+      "measure": "M0_all",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 1,
+      "se": 0,
+      "df": 2
+    },
+    {
+      "measure": "A_all",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 1,
+      "se": 0,
+      "df": 2
+    },
+    {
+      "measure": "H_k0",
+      "k": 0,
+      "over": null,
+      "subgroup": null,
+      "est": 1,
+      "se": 0,
+      "df": 2
+    },
+    {
+      "measure": "M0_k0",
+      "k": 0,
+      "over": null,
+      "subgroup": null,
+      "est": 0.477011494252874,
+      "se": 0.14740495060601,
+      "df": 2
+    },
+    {
+      "measure": "A_k0",
+      "k": 0,
+      "over": null,
+      "subgroup": null,
+      "est": 0.477011494252874,
+      "se": 0.14740495060601,
+      "df": 2
+    },
+    {
+      "measure": "H_k1",
+      "k": 1,
+      "over": null,
+      "subgroup": null,
+      "est": 0.229885057471264,
+      "se": 0.153222532761834,
+      "df": 2
+    },
+    {
+      "measure": "M0_k1",
+      "k": 1,
+      "over": null,
+      "subgroup": null,
+      "est": 0.229885057471264,
+      "se": 0.153222532761834,
+      "df": 2
+    },
+    {
+      "measure": "A_k1",
+      "k": 1,
+      "over": null,
+      "subgroup": null,
+      "est": 1,
+      "se": 0,
+      "df": 2
+    }
+  ]
+}

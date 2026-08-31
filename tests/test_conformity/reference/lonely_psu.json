@@ -1,0 +1,150 @@
+{
+  "design": "lonely_psu",
+  "generator": "tests/test_conformity/generate.py::generate_lonely_psu",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/lonely_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H_fail",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.899082568807339,
+      "se": null,
+      "df": 2
+    },
+    {
+      "measure": "M0_fail",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.520642201834862,
+      "se": null,
+      "df": 2
+    },
+    {
+      "measure": "A_fail",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.579081632653061,
+      "se": null,
+      "df": 2
+    },
+    {
+      "measure": "H_certainty",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.899082568807339,
+      "se": 0.10369497517044,
+      "df": 2
+    },
+    {
+      "measure": "M0_certainty",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.520642201834862,
+      "se": 0.0434041425608576,
+      "df": 2
+    },
+    {
+      "measure": "A_certainty",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.579081632653061,
+      "se": 0.0458807518659408,
+      "df": 2
+    },
+    {
+      "measure": "H_adjust",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.899082568807339,
+      "se": 0.105676534841972,
+      "df": 2
+    },
+    {
+      "measure": "M0_adjust",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.520642201834862,
+      "se": 0.0472886071337892,
+      "df": 2
+    },
+    {
+      "measure": "A_adjust",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.579081632653061,
+      "se": 0.0465318955475836,
+      "df": 2
+    },
+    {
+      "measure": "H_average",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.899082568807339,
+      "se": 0.126999889029075,
+      "df": 2
+    },
+    {
+      "measure": "M0_average",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.520642201834862,
+      "se": 0.0531590009985597,
+      "df": 2
+    },
+    {
+      "measure": "A_average",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.579081632653061,
+      "se": 0.0561922155434011,
+      "df": 2
+    },
+    {
+      "measure": "H_collapse",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.899082568807339,
+      "se": 0.10369497517044,
+      "df": 3
+    },
+    {
+      "measure": "M0_collapse",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.520642201834862,
+      "se": 0.0559768611581344,
+      "df": 3
+    },
+    {
+      "measure": "A_collapse",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.579081632653061,
+      "se": 0.0441248130252633,
+      "df": 3
+    }
+  ]
+}

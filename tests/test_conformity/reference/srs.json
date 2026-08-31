@@ -1,0 +1,42 @@
+{
+  "design": "srs",
+  "generator": "tests/test_conformity/generate.py::generate_srs",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/srs_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.559384206921898,
+      "se": 0.0603871789899734,
+      "df": 99
+    },
+    {
+      "measure": "M0",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.358400930256845,
+      "se": 0.0422177877886989,
+      "df": 99
+    },
+    {
+      "measure": "A",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.6407062012512,
+      "se": 0.0245815783187765,
+      "df": 99
+    }
+  ]
+}

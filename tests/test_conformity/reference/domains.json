@@ -1,0 +1,96 @@
+{
+  "design": "domains",
+  "generator": "tests/test_conformity/generate.py::generate_domains",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/domains_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H",
+      "k": 0.5,
+      "over": "region",
+      "subgroup": "North",
+      "est": 0.897727272727273,
+      "se": 0.110156983987247,
+      "df": 1
+    },
+    {
+      "measure": "M0",
+      "k": 0.5,
+      "over": "region",
+      "subgroup": "North",
+      "est": 0.477272727272727,
+      "se": 0.0621038775421039,
+      "df": 1
+    },
+    {
+      "measure": "A",
+      "k": 0.5,
+      "over": "region",
+      "subgroup": "North",
+      "est": 0.531645569620253,
+      "se": 0.0245955478817638,
+      "df": 1
+    },
+    {
+      "measure": "H",
+      "k": 0.5,
+      "over": "region",
+      "subgroup": "South",
+      "est": 1,
+      "se": 0,
+      "df": 0
+    },
+    {
+      "measure": "M0",
+      "k": 0.5,
+      "over": "region",
+      "subgroup": "South",
+      "est": 0.618421052631579,
+      "se": 0.0186080731891197,
+      "df": 0
+    },
+    {
+      "measure": "A",
+      "k": 0.5,
+      "over": "region",
+      "subgroup": "South",
+      "est": 0.618421052631579,
+      "se": 0.0186080731891197,
+      "df": 0
+    },
+    {
+      "measure": "H",
+      "k": 0.5,
+      "over": "group",
+      "subgroup": "G3",
+      "est": 1,
+      "se": 0,
+      "df": 0
+    },
+    {
+      "measure": "M0",
+      "k": 0.5,
+      "over": "group",
+      "subgroup": "G3",
+      "est": 0.5,
+      "se": 0,
+      "df": 0
+    },
+    {
+      "measure": "A",
+      "k": 0.5,
+      "over": "group",
+      "subgroup": "G3",
+      "est": 0.5,
+      "se": 0,
+      "df": 0
+    }
+  ]
+}

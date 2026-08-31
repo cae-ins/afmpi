@@ -1,0 +1,42 @@
+{
+  "design": "stratified_cluster",
+  "generator": "tests/test_conformity/generate.py::generate_stratified_cluster",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/cluster_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.668716071235259,
+      "se": 0.0476608621421953,
+      "df": 6
+    },
+    {
+      "measure": "M0",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.434232984548911,
+      "se": 0.0349928074406749,
+      "df": 6
+    },
+    {
+      "measure": "A",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.649353295408007,
+      "se": 0.018684130537297,
+      "df": 6
+    }
+  ]
+}

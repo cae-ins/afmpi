@@ -1,0 +1,177 @@
+{
+  "design": "replication",
+  "generator": "tests/test_conformity/generate.py::generate_replication",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/replication_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "H_JK1",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.928571428571428,
+      "se": 0.0710712792686705,
+      "df": 3
+    },
+    {
+      "measure": "M0_JK1",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.51984126984127,
+      "se": 0.0306264210247286,
+      "df": 3
+    },
+    {
+      "measure": "A_JK1",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.55982905982906,
+      "se": 0.0240960250356584,
+      "df": 3
+    },
+    {
+      "measure": "H_JKn",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.928571428571428,
+      "se": 0.0697895172936679,
+      "df": 2
+    },
+    {
+      "measure": "M0_JKn",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.51984126984127,
+      "se": 0.0370019546584351,
+      "df": 2
+    },
+    {
+      "measure": "A_JKn",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.55982905982906,
+      "se": 0.0163290092227441,
+      "df": 2
+    },
+    {
+      "measure": "H_BRR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.928571428571428,
+      "se": 0.0697954977576217,
+      "df": 3
+    },
+    {
+      "measure": "M0_BRR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.51984126984127,
+      "se": 0.0370242452589536,
+      "df": 3
+    },
+    {
+      "measure": "A_BRR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.55982905982906,
+      "se": 0.0164002269232604,
+      "df": 3
+    },
+    {
+      "measure": "H_Fay_BRR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.928571428571428,
+      "se": 0.069746509434807,
+      "df": 3
+    },
+    {
+      "measure": "M0_Fay_BRR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.51984126984127,
+      "se": 0.0369869512179942,
+      "df": 3
+    },
+    {
+      "measure": "A_Fay_BRR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.55982905982906,
+      "se": 0.0163406296613558,
+      "df": 3
+    },
+    {
+      "measure": "H_bootstrap",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.928571428571428,
+      "se": 0.0696829731912315,
+      "df": 19
+    },
+    {
+      "measure": "M0_bootstrap",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.51984126984127,
+      "se": 0.0325570228197648,
+      "df": 19
+    },
+    {
+      "measure": "A_bootstrap",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.55982905982906,
+      "se": 0.0177949678981206,
+      "df": 19
+    },
+    {
+      "measure": "H_SDR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.928571428571428,
+      "se": 0.0794642749068678,
+      "df": 7
+    },
+    {
+      "measure": "M0_SDR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.51984126984127,
+      "se": 0.0373501947617946,
+      "df": 7
+    },
+    {
+      "measure": "A_SDR",
+      "k": 0.333333333333333,
+      "over": null,
+      "subgroup": null,
+      "est": 0.55982905982906,
+      "se": 0.020547509711949,
+      "df": 7
+    }
+  ]
+}

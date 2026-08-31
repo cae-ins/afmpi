@@ -1,0 +1,42 @@
+{
+  "design": "overlap",
+  "generator": "tests/test_conformity/generate.py::generate_overlap",
+  "generator_seed": 20260830,
+  "reference_software": "R survey 4.5",
+  "reference_script": "tools/reference/overlap_reference.R",
+  "produced_on": "2026-08-31",
+  "tolerance": {
+    "est": 1e-09,
+    "se": 1e-07,
+    "df": 0
+  },
+  "values": [
+    {
+      "measure": "Delta_H_perfect",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": -0.25,
+      "se": 0.25,
+      "df": 1
+    },
+    {
+      "measure": "Delta_M0_perfect",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0,
+      "se": 0.25,
+      "df": 1
+    },
+    {
+      "measure": "Delta_H_partial",
+      "k": 0.5,
+      "over": null,
+      "subgroup": null,
+      "est": 0.04,
+      "se": 0.398480313189999,
+      "df": 2
+    }
+  ]
+}

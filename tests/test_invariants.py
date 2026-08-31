@@ -5,6 +5,9 @@ of a phase: they are the cheapest tests in the suite and the fastest to notice
 that a change has broken the internal coherence of the calculation. Nothing here
 depends on ``mpitb``, ``survey`` or any reference implementation -- only on the
 identities of the Alkire-Foster method itself.
+
+Extended in Phase 10 (§14.10) to cover every design family (complex designs,
+multi-stage, lonely PSU policies, PPS, replicate designs, CensusDesign).
 """
 
 import math
@@ -14,7 +17,15 @@ from functools import lru_cache
 import polars as pl
 import pytest
 
-from afmpi import Specification, SurveyDesign, estimate
+from afmpi import (
+    CensusDesign,
+    PPSDesign,
+    ReplicateDesign,
+    Specification,
+    Stage,
+    SurveyDesign,
+    estimate,
+)
 
 SPEC = Specification(
     {
@@ -26,17 +37,68 @@ SPEC = Specification(
 CUTOFFS = [0.0, 0.2, 1 / 3, 0.5, 1.0]
 
 DESIGNS = {
+    # Base survey designs
     "srs": SurveyDesign(weights="w", household_size="size"),
     "clustered": SurveyDesign(weights="w", household_size="size", psu="psu"),
     "stratified": SurveyDesign(
         weights="w", household_size="size", strata="stratum", psu="psu"
     ),
     "unweighted": SurveyDesign(psu="psu"),
+    # Complex survey designs (Phase 4a - 4c)
+    "multistage": SurveyDesign(
+        weights="w",
+        household_size="size",
+        stages=[
+            Stage(id="psu", strata="stratum"),
+            Stage(id="ssu"),
+        ],
+    ),
+    "lonely_certainty": SurveyDesign(
+        weights="w", household_size="size", strata="stratum", psu="psu", lonely_psu="certainty"
+    ),
+    "lonely_adjust": SurveyDesign(
+        weights="w", household_size="size", strata="stratum", psu="psu", lonely_psu="adjust"
+    ),
+    "lonely_average": SurveyDesign(
+        weights="w", household_size="size", strata="stratum", psu="psu", lonely_psu="average"
+    ),
+    "lonely_collapse": SurveyDesign(
+        weights="w", household_size="size", strata="stratum", psu="psu", lonely_psu="collapse"
+    ),
+    "pps_wr": SurveyDesign(
+        weights="w",
+        household_size="size",
+        strata="stratum",
+        psu="psu",
+        pps=PPSDesign(method="with_replacement", inclusion_probability="pi"),
+    ),
+    # Replicate designs (Phase 5a - 5c)
+    "rep_jk1": ReplicateDesign(weights="w", household_size="size", psu="psu", method="JK1"),
+    "rep_jkn": ReplicateDesign(
+        weights="w", household_size="size", strata="stratum", psu="psu", method="JKn"
+    ),
+    "rep_brr": ReplicateDesign(
+        weights="w", household_size="size", strata="stratum_2psu", psu="psu_2psu", method="BRR"
+    ),
+    "rep_fay_brr": ReplicateDesign(
+        weights="w", household_size="size", strata="stratum_2psu", psu="psu_2psu", method="Fay_BRR", fay=0.5
+    ),
+    "rep_bootstrap": ReplicateDesign(
+        weights="w", household_size="size", strata="stratum", psu="psu", method="bootstrap", replicates=20, seed=42
+    ),
+    "rep_sdr": ReplicateDesign(
+        weights="w", household_size="size", strata="stratum_2psu", psu="psu_2psu", method="SDR"
+    ),
+    # Census designs (Phase 9)
+    "census": CensusDesign(weights="w", household_size="size"),
+    "census_unweighted": CensusDesign(household_size="size"),
 }
 
 
 def sample(seed=1234, rows=500):
     generator = random.Random(seed)
+    psus = [generator.randint(1, 45) for _ in range(rows)]
+    psu_pi = {p: round(0.1 + 0.018 * ((p - 1) % 40), 4) for p in range(1, 46)}
     return pl.DataFrame(
         {
             **{
@@ -49,8 +111,12 @@ def sample(seed=1234, rows=500):
             },
             "w": [round(generator.uniform(0.3, 4.0), 4) for _ in range(rows)],
             "size": [generator.randint(1, 10) for _ in range(rows)],
-            "psu": [generator.randint(1, 45) for _ in range(rows)],
+            "psu": psus,
+            "ssu": [generator.randint(1, 120) for _ in range(rows)],
             "stratum": [generator.randint(1, 6) for _ in range(rows)],
+            "stratum_2psu": [generator.randint(1, 4) for _ in range(rows)],
+            "psu_2psu": [1 if generator.random() < 0.5 else 2 for _ in range(rows)],
+            "pi": [psu_pi[p] for p in psus],
             "region": [generator.choice("ABCD") for _ in range(rows)],
         }
     )
@@ -128,6 +194,25 @@ def test_relative_contributions_sum_to_one(design):
 
 
 @pytest.mark.parametrize("design", sorted(DESIGNS))
+def test_dimension_contributions_match_indicator_sums(design):
+    """PLAN.md §14.10: sum_d pctb_dim_d = 1 and sum_{j in d} pctb_j = pctb_dim_d."""
+    for key, values in contexts(results(design)):
+        if values["M0"] == 0:
+            continue
+        # Check sum_d pctb_dim_d = 1
+        total_dim = sum(values[f"pctb_dim::{dim}"] for dim in SPEC.dimensions)
+        assert total_dim == pytest.approx(1.0, abs=1e-12), key
+
+        # Check sum_{j in d} pctb_j = pctb_dim_d and sum_{j in d} actb_j = actb_dim_d
+        for dim, members in SPEC.dimensions.items():
+            dim_actb = sum(values[f"actb::{name}"] for name in members)
+            assert dim_actb == pytest.approx(values[f"actb_dim::{dim}"], abs=1e-12), (key, dim)
+
+            dim_pctb = sum(values[f"pctb::{name}"] for name in members)
+            assert dim_pctb == pytest.approx(values[f"pctb_dim::{dim}"], abs=1e-12), (key, dim)
+
+
+@pytest.mark.parametrize("design", sorted(DESIGNS))
 def test_contributions_are_the_weighted_censored_headcounts(design):
     """``actb_j = w_j * CH_j`` and ``pctb_j = actb_j / M0``."""
 
@@ -198,13 +283,18 @@ def test_a_unit_cutoff_only_keeps_those_deprived_everywhere():
 
 def test_standard_errors_are_reported_or_openly_missing_never_invented():
     for design in sorted(DESIGNS):
+        is_census = isinstance(DESIGNS[design], CensusDesign)
         for row in results(design).estimates().iter_rows(named=True):
+            if is_census:
+                assert row["se"] == 0.0, row
+                continue
             if row["est"] is None:
                 assert math.isnan(row["se"]), row
                 continue
             assert row["se"] >= 0 or math.isnan(row["se"]), row
             if math.isnan(row["se"]):
                 assert math.isnan(row["lci"]) and math.isnan(row["uci"]), row
+
 
 
 def test_the_alkire_foster_weights_sum_to_one():
