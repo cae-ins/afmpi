@@ -3019,6 +3019,111 @@ performance chiffrée (§14.9), construction de la matrice de Hadamard (§14.5b)
 `"collapse"` (§14.4c), interprétation du `fpc` (§14.4a), estimateur PPS par défaut (§14.4b) et
 règle des degrés de liberté par cas (§14.7).
 
+### 14.14 — Cycle de durcissement (hardening) v1.2
+
+**Contexte, tranché ici** : entre `v1.0.0` et `v1.1.1`, trois audits indépendants successifs
+(deux internes à l'orchestration, un par Claude Opus 5 sans contexte du projet) ont chacun trouvé
+au moins un écart réel non détecté par la suite de tests existante — un chemin lazy/streaming qui
+ne reproduisait pas la parité annoncée (`v1.0.1`), des chiffres de benchmark fabriqués par l'agent
+producteur (`v1.1.0`), et un bug statistique confirmé (`vcov()` doublé sur PPS sans remise,
+`v1.1.1`) qui avait échappé à la suite de conformité parce qu'elle ne couvrait pas cette branche.
+Le diagnostic de l'utilisateur (2026-09-01) : la fonctionnalité statistique est maintenant large et
+correcte, mais **l'investissement qui rapporte le plus n'est plus d'ajouter une fonction, c'est
+d'essayer activement de casser le paquet**. Cette section fixe le périmètre de ce cycle avant de le
+lancer — **aucune nouvelle fonctionnalité statistique n'est prévue dans ce cycle**, seulement du
+durcissement, de la mesure fiable, et de la validation adversariale.
+
+#### A. Invariants statistiques génériques, pas par famille
+
+Le trou qui a laissé passer le bug PPS de `v1.1.1` : `diag(vcov()) == se()²` était déjà testé pour
+`taylor`/`replication`/`census`, pas pour `pps` — quatre tests séparés au lieu d'un test générique.
+**Fichier** : `tests/test_invariants_generic.py` (nouveau, distinct de `tests/test_invariants.py`
+qui reste dédié aux identités AF). Paramétrise sur les designs déjà déclarés dans
+`tests/test_invariants.py` (`DESIGNS`, 18 configurations couvrant phases 4a-9) et vérifie, pour
+chacun sans exception :
+- `diag(vcov()) == se()²` (le trou qui a laissé passer `v1.1.1`) ;
+- `M0 == H * A` ;
+- `Σ actbⱼ == M0`, `Σ pctbⱼ == 1` (si `M0 > 0`) ;
+- `Σ φˡ·M0ˡ == M0` (décomposition) ;
+- `Σ pctb_dim_d == 1`, `Σ_{j∈d} pctbⱼ == pctb_dim_d`.
+
+Un futur chemin de variance (nouvelle méthode PPS, nouveau design) ne doit pas pouvoir passer les
+tests sans passer par ce fichier — c'est la garantie structurelle qui manquait.
+
+#### B. Matrice systématique eager × lazy × R, pas des cas ponctuels
+
+Les vérifications de parité de `v1.1.0`/`v1.1.1` (missing policies, domaine, FPC, PPS,
+`ReplicateDesign`) ont été écrites au cas par cas, par l'orchestrateur, après coup. **Fichier** :
+`tests/test_parity_matrix.py` (nouveau). Produit cartésien systématique, pas exhaustif au sens
+combinatoire strict mais couvrant chaque axe croisé au moins une fois : design (`SurveyDesign`
+simple/stratifié/multi-degrés/PPS/FPC, `ReplicateDesign` des 6 méthodes, `CensusDesign`) ×
+politique de valeurs manquantes (les 4) × présence de domaine × présence de `over` × chemin
+(`memory`/`lazy`/`streaming`). Sur chaque cellule où une référence R existe déjà
+(`tests/test_conformity/reference/`), compare aussi contre R. Un test générateur (pas 200 tests
+écrits à la main) qui construit les cas et vérifie
+$\hat\theta_R \approx \hat\theta_{eager} \approx \hat\theta_{streaming}$ et
+$SE_R \approx SE_{eager} \approx SE_{streaming}$, tolérances identiques à §14.10.
+
+#### C. Property-based testing
+
+**Fichier** : `tests/test_properties.py` (nouveau), bibliothèque `hypothesis`, ajoutée aux
+dépendances de test (`pyproject.toml`, extra `test`). Génère des jeux de données synthétiques
+aléatoires (nombre de strates, de PSU par strate, d'indicateurs, poids, valeurs manquantes) et
+vérifie les mêmes invariants que §14.14.A sur chaque tirage — pas pour remplacer les tests
+déterministes existants, pour trouver des cas limites qu'un humain n'écrirait pas.
+
+#### D. Mesure RAM réelle (le point que l'utilisateur et l'évaluation Opus 5 jugent le plus faible)
+
+Constat partagé : `ExecutionConfig(memory_limit=...)` reste un no-op documenté, et la mesure de
+RAM des benchmarks 30M/50M (`isolated_process=True`) suit le process **parent**, pas l'**enfant**
+où le calcul a lieu — chiffre actuellement sans signification physique. Le test 10M lui-même ne
+mesure qu'un delta avant/après (`mem_after - mem_before`), pas un vrai pic
+$\max_t \mathrm{RSS}(t)$ : un pic transitoire entre les deux mesures est invisible.
+
+**Fichier** : `src/afmpi/_rss_monitor.py` (nouveau, interne). Pour le chemin `isolated_process`,
+fait remonter du sous-processus enfant un échantillonnage périodique de son propre RSS (thread
+dédié dans l'enfant, `resource.getrusage`/`psutil.Process().memory_info().rss` toutes les
+~50-100ms, pic retenu) transmis au parent avec le résultat via le protocole pickle déjà en place.
+Pour le chemin in-process (`isolated_process=False`), même échantillonnage dans un thread du
+process courant. Le rapport de benchmark expose : `baseline_rss`, `peak_rss`, `incremental_peak`,
+`elapsed`, `threads_observed`, et si simple à obtenir, un compteur d'E/S disque. Documente
+honnêtement le coût de l'échantillonnage lui-même (a un coût CPU non nul, à mesurer).
+
+`memory_limit`/`spill_dir` : soit une implémentation réelle si l'API Polars installée le permet
+(vérifier la version exacte au moment de ce stamp — l'API de streaming de Polars évolue vite),
+soit **acter explicitement dans le README que ce sont des limitations permanentes de conception**
+plutôt que des "pas encore" indéfinis — l'un ou l'autre, mais pas laisser la question ouverte
+indéfiniment.
+
+#### E. Benchmark reproductible et machine-lisible, avec variation du nombre de threads
+
+**Fichier** : `benchmarks/report.py` (nouveau) qui exécute les benchmarks 10M/30M/50M avec
+`ExecutionConfig(max_threads=N, isolated_process=True)` pour `N ∈ {4, 8, 16}` (adapter à ce que la
+machine réelle permet) et produit un JSON structuré (une ligne par combinaison échelle × threads :
+temps, pic RSS réel via §14.14.D, threads observés) plutôt que des lignes de log à copier-coller
+dans le README à la main — c'est ce qui a permis les chiffres fabriqués de `v1.1.0` de passer
+inaperçus un temps. Le README/CHANGELOG citent ce rapport plutôt que des chiffres recopiés. Si le
+temps le permet, un jeu de données administratif ou de recensement réel (dépersonnalisé,
+publiquement disponible) en complément du synthétique — sinon, documenter que ce n'est pas fait
+et pourquoi.
+
+#### F. Audit adversarial
+
+Déjà amorcé (Opus 5, 2026-09-01, sans contexte du projet, a trouvé le bug de §14.14 avant même que
+cette section existe). **Ce cycle formalise la pratique** : à la fin de ce stamp de durcissement,
+un nouvel audit indépendant (agent sans contexte de la session qui l'a produit, instruit à vérifier
+empiriquement plutôt qu'à faire confiance à la documentation) doit être relancé sur le résultat.
+Si cet audit ne trouve plus de bug statistique confirmé (des remarques de style/documentation
+restent acceptables), le cycle de durcissement peut être considéré clos et `v1.2.0` publiée.
+
+#### Hors périmètre de ce cycle
+
+Aucune nouvelle famille de design, aucune nouvelle méthode statistique, aucun nouveau backend
+d'entrée/sortie. Si un audit en trouve le besoin en cours de route, ouvrir une section `14.15`
+séparée plutôt que d'élargir celle-ci après coup.
+
+---
+
 ## 15. Relecture de code du noyau v1 et jalon 3.5 (utilisateur, 2026-08-30)
 
 Après la livraison du noyau v1 (phases 0-3, tag `v0.2.0`, 104/104 tests), l'utilisateur a relu le
